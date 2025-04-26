@@ -1,0 +1,124 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id Int @id @default(autoincrement())
+  telegramId String @unique
+  username String? @unique
+  createdAt DateTime @default(now())
+
+  BotSeller BotSeller[]
+}
+
+enum BotSellerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WAITING
+}
+
+enum BotCategories {
+  GAMBLING
+  OTHER
+  DATING
+  GAMES
+  CRYPTO
+  FUN
+  TECH
+  UTILITY
+}
+
+model BotSeller {
+  id Int @id @default(autoincrement())
+  userId Int
+  apiKey String @unique
+  botToken String @unique
+  usersData Json
+  description String?
+  createdAt DateTime @default(now())
+  fixedPrice Float?
+  subscriberPrice Float?
+  link String
+  isActive Boolean @default(false)
+  acceptStatus BotSellerStatus @default(PENDING)
+  category BotCategories
+  isChannel Boolean @default(false)
+
+  // Bot statistics
+  botLiveAudience Int? @default(0)
+  botMonthlyActiveUsers Int? @default(0)
+
+  lastMailingPeopleIncome Int? @default(0)
+  lastMailingDate DateTime?
+  lastMailingMoneyIncome Int? @default(0)
+
+  // channel statistics
+  channelAudience Int? @default(0)
+  channelDaylyActiveUsers Int? @default(0)
+  channelDailyPeopleIncome Int? @default(0)
+
+
+
+  user User @relation(fields: [userId], references: [id])
+
+  mailingReservations MailingReservation[]
+
+  MailingTargetBots MailingTargetBots[]
+}
+
+
+model MailingReservation {
+  id Int @id @default(autoincrement())
+  mailingId Int
+  botSellerId Int
+  date DateTime
+  selectedFilters Json
+
+  mailing Mailing @relation(fields: [mailingId], references: [id])
+  botSeller BotSeller @relation(fields: [botSellerId], references: [id])
+}
+
+model Mailing {
+  id Int @id @default(autoincrement())
+  userId Int
+  botToken String
+
+  // post
+  postContent String
+  postButtons Json
+  postMedia String?
+  postMediaType String?
+  
+
+  mailingReservations MailingReservation[]
+
+  MailingTargetBots MailingTargetBots[]
+}
+
+model MailingTargetBots {
+  id Int @id @default(autoincrement())
+  botSellerId Int
+  mailingId Int
+  link String
+  peopleInvited Int? @default(0)
+
+  botSeller BotSeller @relation(fields: [botSellerId], references: [id])
+  mailing Mailing @relation(fields: [mailingId], references: [id])
+}
+
+
+
+
