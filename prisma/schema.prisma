@@ -31,6 +31,13 @@ enum BotSellerStatus {
   WAITING
 }
 
+enum MailingStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WAITING
+}
+
 enum BotCategories {
   GAMBLING
   OTHER
@@ -96,6 +103,10 @@ model Mailing {
   id Int @id @default(autoincrement())
   userId Int
   botToken String
+
+  status MailingStatus @default(PENDING)
+  isActive Boolean @default(false)
+
 
   // post
   postContent String

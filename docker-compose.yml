@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
     # Wait for database to be ready before starting the app
     command: >
-      sh -c "npx prisma migrate deploy && npm run start:prod"
+      sh -c "npx prisma migrate deploy && npm run start"
 
   postgres:
     container_name: postgres
