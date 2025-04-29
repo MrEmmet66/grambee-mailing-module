@@ -6,7 +6,6 @@
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
 }
 
 datasource db {
@@ -26,6 +25,13 @@ model User {
 }
 
 enum BotSellerStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  WAITING
+}
+
+enum MailingStatus {
   PENDING
   APPROVED
   REJECTED
@@ -97,6 +103,10 @@ model Mailing {
   id Int @id @default(autoincrement())
   userId Int
   botToken String
+
+  status MailingStatus @default(PENDING)
+  isActive Boolean @default(false)
+
 
   // post
   postContent String
