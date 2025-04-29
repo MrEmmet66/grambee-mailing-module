@@ -21,6 +21,8 @@ model User {
   createdAt DateTime @default(now())
 
   BotSeller BotSeller[]
+
+  Mailing Mailing[]
 }
 
 enum BotSellerStatus {
@@ -101,6 +103,8 @@ model Mailing {
   postButtons Json
   postMedia String?
   postMediaType String?
+
+  user User @relation(fields: [userId], references: [id])
   
 
   mailingReservations MailingReservation[]
