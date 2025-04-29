@@ -1,8 +1,11 @@
+import { Multer } from "multer";
+
 export type CreateMailingDto = {
     botToken: string;
     userId: number;
     content: string;
     mediaType: string;
+    media: Express.Multer.File | null;
     buttons: {url: string; text: string}[];
 }
 

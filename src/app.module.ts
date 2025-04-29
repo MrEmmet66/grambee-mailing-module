@@ -7,9 +7,14 @@ import { TelegramModule } from './modules/telegram/telegram.module';
 import { ConfigModule } from '@nestjs/config';
 import { BotSellersModule } from './modules/bot_sellers/bot-sellers.module';
 import { UsersModule } from './modules/users';
+import { ServeStaticModule } from '@nestjs/serve-static';
 
 @Module({
   imports: [
+    ServeStaticModule.forRoot({
+      rootPath: `${process.cwd()}/uploads`,
+      serveRoot: '/uploads',
+    }),
     ConfigModule.forRoot({
       isGlobal: true
     }),

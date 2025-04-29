@@ -9,10 +9,12 @@ import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { PrismaModule } from 'prisma/prisma.module';
+import { TelegramModule } from '../telegram/telegram.module';
 
 @Module({
     imports: [
         PrismaModule,
+        TelegramModule,
         MulterModule.register({
             storage: diskStorage({
                 destination: './uploads',

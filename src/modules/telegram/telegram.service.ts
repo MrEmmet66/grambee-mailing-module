@@ -49,6 +49,7 @@ export class TelegramService {
         message_thread_id: applicationsTopicId,
       });
     } catch (error) {
+      console.error('Error sending message to Telegram:', error);
       throw new HttpException('Failed to send message', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }

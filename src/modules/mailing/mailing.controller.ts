@@ -28,9 +28,6 @@ export class MailingController {
         @Body() dto: CreateMailingDto,
         @UploadedFile(
             new ParseFilePipeBuilder()
-                .addFileTypeValidator({
-                    fileType: /(jpg|jpeg|png|gif|mp4|avi|mov)$/,
-                })
                 .addMaxSizeValidator({
                     maxSize: 10 * 1024 * 1024, // 10MB
                 })
@@ -41,12 +38,44 @@ export class MailingController {
         ) file: Express.Multer.File,
     ) {
         let buttons = dto.buttons;
+        
+        // Improved parsing logic for buttons
         if (typeof dto.buttons === 'string') {
-            buttons = JSON.parse(dto.buttons as any);
+            try {
+                if (dto.buttons && dto.buttons !== 'undefined') {
+                    // Fix for JavaScript object notation without quotes around property names
+                    // Convert to valid JSON by adding quotes to property names
+                    const buttonsStr = dto.buttons as string; // Explicit cast to string
+                    const fixedJsonString = buttonsStr
+                        .replace(/(\w+):/g, '"$1":')  // Add quotes around property names
+                        .replace(/'/g, '"');          // Replace single quotes with double quotes if needed
+                    
+                    buttons = JSON.parse(fixedJsonString);
+                } else {
+                    buttons = []; // Default to empty array if undefined
+                }
+            } catch (error) {
+                console.error('Error parsing buttons JSON:', dto.buttons);
+                
+                // Attempt to parse using Function constructor as a fallback for JavaScript object notation
+                try {
+                    const buttonsStr = dto.buttons as string;
+                    buttons = new Function('return ' + buttonsStr)();
+                } catch (funcError) {
+                    console.error('Fallback parsing also failed:', funcError);
+                    buttons = []; // Default to empty array on parsing error
+                }
+            }
+        } else if (!dto.buttons) {
+            buttons = []; // Ensure buttons is at least an empty array if null or undefined
         }
+        
+        // Convert userId from string to integer
+        const userId = typeof dto.userId === 'string' ? parseInt(dto.userId, 10) : dto.userId;
         
         return await this.mailingService.createMailing({
             ...dto,
+            userId,
             buttons,
             media: file,
         } as CreateMailingFormData);

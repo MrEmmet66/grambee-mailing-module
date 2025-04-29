@@ -6,16 +6,17 @@ import { ConflictException, Injectable, NotFoundException } from '@nestjs/common
 import { CreateMailingDto, CreateMailingFormData } from './dto/createMailing.dto';
 import { PrismaService } from 'prisma/prisma.service';
 import { CreateMailingReservationDto } from './dto/createMailingReservation.dto';
+import { TelegramService } from '../telegram/telegram.service';
 
 @Injectable()
 export class MailingService {
-    constructor(private readonly prismaService: PrismaService) {}
+    constructor(private readonly prismaService: PrismaService, private telegramService: TelegramService) {}
 
     async createMailing(dto: CreateMailingFormData) {
         const jsonPostButtons = JSON.stringify(dto.buttons);
         const mediaPath = dto.media ? dto.media.path : null;
 
-        return await this.prismaService.mailing.create({
+        const mailing =  await this.prismaService.mailing.create({
             data: {
                 botToken: dto.botToken,
                 postMedia: mediaPath,
@@ -25,6 +26,8 @@ export class MailingService {
                 userId: dto.userId,
             }
         });
+
+        await this.telegramService.sendMailingApplication(mailing);
     }
 
     async toggleMailingStatus(mailingId: number) {
