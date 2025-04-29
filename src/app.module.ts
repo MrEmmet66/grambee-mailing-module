@@ -1,4 +1,4 @@
-import { PrismaModule } from './../prisma/prisma.module';
+import { PrismaModule } from 'prisma/prisma.module';
 
 import { MailingModule } from './modules/mailing/mailing.module';
 import { Module } from '@nestjs/common';
@@ -6,7 +6,6 @@ import { HttpModule } from '@nestjs/axios';
 import { TelegramModule } from './modules/telegram/telegram.module';
 import { ConfigModule } from '@nestjs/config';
 import { BotSellersModule } from './modules/bot_sellers/bot-sellers.module';
-import { PrismaModule } from './modules/prisma';
 import { UsersModule } from './modules/users';
 
 @Module({
