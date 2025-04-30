@@ -39,14 +39,14 @@ enum MailingStatus {
 }
 
 enum BotCategories {
-  GAMBLING
-  OTHER
-  DATING
-  GAMES
-  CRYPTO
-  FUN
-  TECH
-  UTILITY
+  GAMBLING      // Гэмблинг
+  OTHER         // Другое 
+  DATING        // Знакомства
+  GAMES         // Игры
+  CRYPTO        // Крипто
+  FUN           // Развлечения
+  TECH          // Технологии/нейросети
+  UTILITY       // Утилиты/Продуктивность
 }
 
 model BotSeller {

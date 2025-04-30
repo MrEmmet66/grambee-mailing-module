@@ -10,7 +10,7 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/bee_app_db?schema=public
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/mailing_db?schema=public
     depends_on:
       - postgres
     networks:

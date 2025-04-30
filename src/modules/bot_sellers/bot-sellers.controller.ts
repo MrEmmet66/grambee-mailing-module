@@ -71,6 +71,14 @@ export class BotSellersController {
     return this.botSellersService.updateStatus(+id, status);
   }
 
+  @Post(':id/regenerate-api-key')
+  @ApiOperation({ summary: 'Регенерация API ключа для продавца бота' })
+  @ApiParam({ name: 'id', description: 'ID продавца бота' })
+  @ApiResponse({ status: 200, description: 'API ключ успешно обновлен' })
+  regenerateApiKey(@Param('id') id: string) {
+    return this.botSellersService.regenerateApiKey(+id);
+  }
+
   @Patch(':id/statistics')
   @ApiOperation({ summary: 'Обновление статистики продавца бота' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })
@@ -108,6 +116,29 @@ export class BotSellersController {
     }
   ) {
     return this.botSellersService.updateStatistics(+id, statistics);
+  }
+
+  @Patch(':id/category')
+  @ApiOperation({ summary: 'Обновление категории бота' })
+  @ApiParam({ name: 'id', description: 'ID продавца бота' })
+  @ApiBody({ 
+    schema: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'],
+          description: 'Новая категория бота'
+        }
+      }
+    }
+  })
+  @ApiResponse({ status: 200, description: 'Категория бота обновлена' })
+  updateCategory(
+    @Param('id') id: string, 
+    @Body('category') category: 'GAMBLING' | 'OTHER' | 'DATING' | 'GAMES' | 'CRYPTO' | 'FUN' | 'TECH' | 'UTILITY'
+  ) {
+    return this.botSellersService.updateCategory(+id, category);
   }
 
   @Delete(':id')
