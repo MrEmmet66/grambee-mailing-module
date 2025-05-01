@@ -137,14 +137,105 @@ export class BotSellersService {
     }
   }
 
-  async create(createBotSellerDto: CreateBotSellerDto, statisticsFile?: Express.Multer.File) {
+  private async validateUser(userId: number): Promise<void> {
     const userExists = await this.prisma.user.findUnique({
-      where: { id: createBotSellerDto.userId }
+      where: { id: userId }
     });
 
     if (!userExists) {
-      throw new BadRequestException(`User with id ${createBotSellerDto.userId} not found`);
+      throw new BadRequestException(`User with id ${userId} not found`);
     }
+  }
+
+  private async validateChannelAccess(botToken: string, channelId: string): Promise<void> {
+    try {
+      const channelInfoResponse = await axios.get(
+        `https://api.telegram.org/bot${botToken}/getChat?chat_id=${channelId}`
+      );
+      
+      if (channelInfoResponse.data && channelInfoResponse.data.ok) {
+        this.logger.log('Channel Information:');
+        this.logger.log(JSON.stringify(channelInfoResponse.data.result, null, 2));
+
+        await this.validateBotAdminRights(botToken, channelId);
+      } else {
+        throw new BadRequestException('Invalid channel ID or bot does not have access to the channel');
+      }
+    } catch (error) {
+      if (error.response && error.response.status === 400) {
+        throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+      }
+      throw new BadRequestException('Failed to verify channel ID: ' + error.message);
+    }
+  }
+
+  private async validateBotAdminRights(botToken: string, channelId: string): Promise<void> {
+    try {
+      const adminResponse = await axios.get(
+        `https://api.telegram.org/bot${botToken}/getChatAdministrators?chat_id=${channelId}`
+      );
+
+      if (adminResponse.data && adminResponse.data.ok) {
+        const administrators = adminResponse.data.result;
+        const botInfo = await axios.get(
+          `https://api.telegram.org/bot${botToken}/getMe`
+        );
+
+        if (botInfo.data && botInfo.data.ok) {
+          const botId = botInfo.data.result.id;
+          const isAdmin = administrators.some(admin => admin.user.id === botId);
+
+          if (!isAdmin) {
+            throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+          }
+        }
+      } else {
+        throw new BadRequestException('Failed to get channel administrators information');
+      }
+    } catch (error) {
+      if (error.response && error.response.status === 403) {
+        throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+      }
+      throw error;
+    }
+  }
+
+  private async getBotInfo(botToken: string): Promise<void> {
+    try {
+      const botInfoResponse = await axios.get(
+        `https://api.telegram.org/bot${botToken}/getMe`
+      );
+      
+      if (botInfoResponse.data && botInfoResponse.data.ok) {
+        this.logger.log('Basic Bot Information:');
+        this.logger.log(JSON.stringify(botInfoResponse.data.result, null, 2));
+      } else {
+        this.logger.warn('Failed to get basic bot information from Telegram API');
+      }
+    } catch (error) {
+      this.logger.error(`Error getting bot information: ${error.message}`);
+    }
+  }
+
+  private async handleStatisticsFile(statisticsFile?: Express.Multer.File): Promise<string | null> {
+    if (!statisticsFile) return null;
+
+    const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
+    try {
+      await this.validateStatisticsFile(filePath);
+      return `/uploads/bot_users/${statisticsFile.filename}`;
+    } catch (error) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {
+        console.error('Error deleting invalid statistics file:', e);
+      }
+      throw error;
+    }
+  }
+
+  async create(createBotSellerDto: CreateBotSellerDto, statisticsFile?: Express.Multer.File) {
+    await this.validateUser(createBotSellerDto.userId);
 
     if (!this.validateBotToken(createBotSellerDto.botToken)) {
       throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
@@ -154,92 +245,17 @@ export class BotSellersService {
       throw new BadRequestException('Channel ID is required when isChannel is true');
     }
 
-    try {
-      const botInfoResponse = await axios.get(
-        `https://api.telegram.org/bot${createBotSellerDto.botToken}/getMe`
-      );
-      
-      if (botInfoResponse.data && botInfoResponse.data.ok) {
-        this.logger.log('Basic Bot Information:');
-        this.logger.log(JSON.stringify(botInfoResponse.data.result, null, 2));
-      } else {
-        this.logger.warn('Failed to get basic bot information from Telegram API');
-      }
+    await this.getBotInfo(createBotSellerDto.botToken);
 
-      if (createBotSellerDto.isChannel && createBotSellerDto.channelId) {
-        try {
-          const channelInfoResponse = await axios.get(
-            `https://api.telegram.org/bot${createBotSellerDto.botToken}/getChat?chat_id=${createBotSellerDto.channelId}`
-          );
-          
-          if (channelInfoResponse.data && channelInfoResponse.data.ok) {
-            this.logger.log('Channel Information:');
-            this.logger.log(JSON.stringify(channelInfoResponse.data.result, null, 2));
-
-            try {
-              const adminResponse = await axios.get(
-                `https://api.telegram.org/bot${createBotSellerDto.botToken}/getChatAdministrators?chat_id=${createBotSellerDto.channelId}`
-              );
-
-              if (adminResponse.data && adminResponse.data.ok) {
-                const administrators = adminResponse.data.result;
-                const botInfo = await axios.get(
-                  `https://api.telegram.org/bot${createBotSellerDto.botToken}/getMe`
-                );
-
-                if (botInfo.data && botInfo.data.ok) {
-                  const botId = botInfo.data.result.id;
-                  const isAdmin = administrators.some(admin => admin.user.id === botId);
-
-                  if (!isAdmin) {
-                    throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
-                  }
-                }
-              } else {
-                throw new BadRequestException('Failed to get channel administrators information');
-              }
-            } catch (error) {
-              if (error.response && error.response.status === 403) {
-                throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
-              }
-              throw error;
-            }
-          } else {
-            throw new BadRequestException('Invalid channel ID or bot does not have access to the channel');
-          }
-        } catch (error) {
-          if (error.response && error.response.status === 400) {
-            throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
-          }
-          throw new BadRequestException('Failed to verify channel ID: ' + error.message);
-        }
-      }
-
-    } catch (error) {
-      this.logger.error(`Error getting bot information: ${error.message}`);
+    if (createBotSellerDto.isChannel && createBotSellerDto.channelId) {
+      await this.validateChannelAccess(createBotSellerDto.botToken, createBotSellerDto.channelId);
     }
 
     const mau = await this.calculateMAU(createBotSellerDto.botToken);
     this.logger.log(`[MAU] Bot ${createBotSellerDto.botToken.slice(0, 10)} has ${mau} monthly active users`);
 
     const apiKey = this.generateApiKey();
-
-    let statisticsFilePath: string | null = null;
-    
-    if (statisticsFile) {
-      const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
-      try {
-        await this.validateStatisticsFile(filePath);
-        statisticsFilePath = `/uploads/bot_users/${statisticsFile.filename}`;
-      } catch (error) {
-        try {
-          fs.unlinkSync(filePath);
-        } catch (e) {
-          console.error('Error deleting invalid statistics file:', e);
-        }
-        throw error;
-      }
-    }
+    const statisticsFilePath = await this.handleStatisticsFile(statisticsFile);
 
     const botSeller = await this.prisma.botSeller.create({
       data: {
@@ -249,7 +265,7 @@ export class BotSellersService {
         statisticsFilePath,
         usersData: {},
         channelId: createBotSellerDto.isChannel ? createBotSellerDto.channelId : null
-      } as any, 
+      } as any,
     });
 
     try {
@@ -349,7 +365,6 @@ export class BotSellersService {
       throw new BadRequestException(`Bot seller with id ${id} not found`);
     }
 
-    // Validate statistics file content
     const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
     try {
       await this.validateStatisticsFile(filePath);
@@ -384,7 +399,6 @@ export class BotSellersService {
 
       return updatedBotSeller;
     } catch (error) {
-      // If validation fails, delete the file
       try {
         fs.unlinkSync(filePath);
       } catch (e) {
