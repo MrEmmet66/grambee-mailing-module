@@ -71,14 +71,14 @@ model BotSeller {
   botLiveAudience Int? @default(0)         //  живые люди
   botMonthlyActiveUsers Int? @default(0)   // мау
 
-  lastMailingPeopleIncome Int? @default(0) // 
-  lastMailingDate DateTime?
-  lastMailingMoneyIncome Int? @default(0)
+  lastMailingPeopleIncome Int? @default(0) // Какое кол-во пришло с прошлой рассылки
+  lastMailingDate DateTime? // Дата последней рассылки
+  lastMailingMoneyIncome Int? @default(0) // Сколько пришло денег с последней рассылки
 
-  // channel statistics
-  channelAudience Int? @default(0)
-  channelDaylyActiveUsers Int? @default(0)
-  channelDailyPeopleIncome Int? @default(0)
+  // channel statistics 
+  channelAudience Int? @default(0) // общая ааудитория
+  channelDaylyActiveUsers Int? @default(0) // суточный охват
+  channelDailyPeopleIncome Int? @default(0) // прирост в сутки
 
   user User @relation(fields: [userId], references: [id])
 
@@ -125,6 +125,7 @@ model MailingTargetBots {
   mailingId Int
   link String
   peopleInvited Int? @default(0)
+  paymentType String @default("fixed")
 
   botSeller BotSeller @relation(fields: [botSellerId], references: [id])
   mailing Mailing @relation(fields: [mailingId], references: [id])

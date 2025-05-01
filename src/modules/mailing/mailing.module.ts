@@ -10,9 +10,13 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { PrismaModule } from 'prisma/prisma.module';
 import { TelegramModule } from '../telegram/telegram.module';
+import { HttpModule } from '@nestjs/axios';
+import { ConfigModule } from '@nestjs/config';
 
 @Module({
     imports: [
+        ConfigModule,
+        HttpModule,
         PrismaModule,
         TelegramModule,
         MulterModule.register({
