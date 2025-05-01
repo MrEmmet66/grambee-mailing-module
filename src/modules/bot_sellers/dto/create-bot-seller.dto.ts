@@ -56,4 +56,13 @@ export class CreateBotSellerDto {
   @IsBoolean()
   @IsOptional()
   isChannel?: boolean;
+
+  @ApiProperty({ 
+    description: 'Файл статистики пользователей бота (.txt)', 
+    type: 'string', 
+    format: 'binary',
+    required: false 
+  })
+  @IsOptional()
+  statisticsFile?: any;
 } 

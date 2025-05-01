@@ -57,19 +57,20 @@ model BotSeller {
   usersData Json
   description String?
   createdAt DateTime @default(now())
-  fixedPrice Float?
-  subscriberPrice Float?
+  fixedPrice Float?                        // фикс цена за всю рассылку
+  subscriberPrice Float?                   // за 1 подписаного подпищика на канал рассылки
   link String
   isActive Boolean @default(false)
   acceptStatus BotSellerStatus @default(PENDING)
   category BotCategories
   isChannel Boolean @default(false)
+  statisticsFilePath String?               // путь к файлу статистики бота
 
   // Bot statistics
-  botLiveAudience Int? @default(0)
-  botMonthlyActiveUsers Int? @default(0)
+  botLiveAudience Int? @default(0)         //  живые люди
+  botMonthlyActiveUsers Int? @default(0)   // мау
 
-  lastMailingPeopleIncome Int? @default(0)
+  lastMailingPeopleIncome Int? @default(0) // 
   lastMailingDate DateTime?
   lastMailingMoneyIncome Int? @default(0)
 
