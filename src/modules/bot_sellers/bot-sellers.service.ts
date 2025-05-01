@@ -150,7 +150,75 @@ export class BotSellersService {
       throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
     }
 
-    // Calculate MAU before creating the bot
+    if (createBotSellerDto.isChannel && !createBotSellerDto.channelId) {
+      throw new BadRequestException('Channel ID is required when isChannel is true');
+    }
+
+    try {
+      const botInfoResponse = await axios.get(
+        `https://api.telegram.org/bot${createBotSellerDto.botToken}/getMe`
+      );
+      
+      if (botInfoResponse.data && botInfoResponse.data.ok) {
+        this.logger.log('Basic Bot Information:');
+        this.logger.log(JSON.stringify(botInfoResponse.data.result, null, 2));
+      } else {
+        this.logger.warn('Failed to get basic bot information from Telegram API');
+      }
+
+      if (createBotSellerDto.isChannel && createBotSellerDto.channelId) {
+        try {
+          const channelInfoResponse = await axios.get(
+            `https://api.telegram.org/bot${createBotSellerDto.botToken}/getChat?chat_id=${createBotSellerDto.channelId}`
+          );
+          
+          if (channelInfoResponse.data && channelInfoResponse.data.ok) {
+            this.logger.log('Channel Information:');
+            this.logger.log(JSON.stringify(channelInfoResponse.data.result, null, 2));
+
+            try {
+              const adminResponse = await axios.get(
+                `https://api.telegram.org/bot${createBotSellerDto.botToken}/getChatAdministrators?chat_id=${createBotSellerDto.channelId}`
+              );
+
+              if (adminResponse.data && adminResponse.data.ok) {
+                const administrators = adminResponse.data.result;
+                const botInfo = await axios.get(
+                  `https://api.telegram.org/bot${createBotSellerDto.botToken}/getMe`
+                );
+
+                if (botInfo.data && botInfo.data.ok) {
+                  const botId = botInfo.data.result.id;
+                  const isAdmin = administrators.some(admin => admin.user.id === botId);
+
+                  if (!isAdmin) {
+                    throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+                  }
+                }
+              } else {
+                throw new BadRequestException('Failed to get channel administrators information');
+              }
+            } catch (error) {
+              if (error.response && error.response.status === 403) {
+                throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+              }
+              throw error;
+            }
+          } else {
+            throw new BadRequestException('Invalid channel ID or bot does not have access to the channel');
+          }
+        } catch (error) {
+          if (error.response && error.response.status === 400) {
+            throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+          }
+          throw new BadRequestException('Failed to verify channel ID: ' + error.message);
+        }
+      }
+
+    } catch (error) {
+      this.logger.error(`Error getting bot information: ${error.message}`);
+    }
+
     const mau = await this.calculateMAU(createBotSellerDto.botToken);
     this.logger.log(`[MAU] Bot ${createBotSellerDto.botToken.slice(0, 10)} has ${mau} monthly active users`);
 
@@ -159,13 +227,11 @@ export class BotSellersService {
     let statisticsFilePath: string | null = null;
     
     if (statisticsFile) {
-      // Validate statistics file content
       const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
       try {
         await this.validateStatisticsFile(filePath);
         statisticsFilePath = `/uploads/bot_users/${statisticsFile.filename}`;
       } catch (error) {
-        // If validation fails, delete the file
         try {
           fs.unlinkSync(filePath);
         } catch (e) {
@@ -181,8 +247,9 @@ export class BotSellersService {
         apiKey,
         acceptStatus: 'PENDING',
         statisticsFilePath,
-        usersData: {}
-      },
+        usersData: {},
+        channelId: createBotSellerDto.isChannel ? createBotSellerDto.channelId : null
+      } as any, 
     });
 
     try {

@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsNumber, IsString, IsOptional, IsBoolean, IsEnum, Matches } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsString, IsOptional, IsBoolean, IsEnum, Matches, ValidateIf } from 'class-validator';
+import { BotCategories } from '@prisma/client';
 
 export class CreateBotSellerDto {
   @ApiProperty({ description: 'ID пользователя, которому принадлежит бот' })
@@ -48,9 +49,9 @@ export class CreateBotSellerDto {
     description: 'Категория бота',
     enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY']
   })
-  @IsEnum(['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'])
+  @IsEnum(BotCategories)
   @IsNotEmpty()
-  category: 'GAMBLING' | 'OTHER' | 'DATING' | 'GAMES' | 'CRYPTO' | 'FUN' | 'TECH' | 'UTILITY';
+  category: BotCategories;
 
   @ApiProperty({ description: 'Является ли бот каналом', default: false, required: false })
   @IsBoolean()
@@ -65,4 +66,9 @@ export class CreateBotSellerDto {
   })
   @IsOptional()
   statisticsFile?: any;
+
+  @IsString()
+  @ValidateIf(o => o.isChannel === true)
+  @ApiProperty({ description: 'ID канала', required: false })
+  channelId?: string;
 } 

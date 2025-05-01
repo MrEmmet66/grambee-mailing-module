@@ -64,6 +64,7 @@ model BotSeller {
   acceptStatus BotSellerStatus @default(PENDING)
   category BotCategories
   isChannel Boolean @default(false)
+  channelId String?                        // ID канала, если isChannel = true
   statisticsFilePath String?               // путь к файлу статистики бота
 
   // Bot statistics
@@ -79,15 +80,12 @@ model BotSeller {
   channelDaylyActiveUsers Int? @default(0)
   channelDailyPeopleIncome Int? @default(0)
 
-
-
   user User @relation(fields: [userId], references: [id])
 
   mailingReservations MailingReservation[]
 
   MailingTargetBots MailingTargetBots[]
 }
-
 
 model MailingReservation {
   id Int @id @default(autoincrement())
@@ -108,7 +106,6 @@ model Mailing {
   status MailingStatus @default(PENDING)
   isActive Boolean @default(false)
 
-
   // post
   postContent String
   postButtons Json
@@ -117,7 +114,6 @@ model Mailing {
 
   user User @relation(fields: [userId], references: [id])
   
-
   mailingReservations MailingReservation[]
 
   MailingTargetBots MailingTargetBots[]
