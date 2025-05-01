@@ -8,9 +8,11 @@ import { ConfigModule } from '@nestjs/config';
 import { BotSellersModule } from './modules/bot_sellers/bot-sellers.module';
 import { UsersModule } from './modules/users';
 import { ServeStaticModule } from '@nestjs/serve-static';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     ServeStaticModule.forRoot({
       rootPath: `${process.cwd()}/uploads`,
       serveRoot: '/uploads',
