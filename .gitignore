@@ -25,3 +25,4 @@ experimental/**/*.db
 dev.db
 *.env*
 !.env.example
+uploads/

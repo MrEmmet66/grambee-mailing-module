@@ -39,14 +39,14 @@ enum MailingStatus {
 }
 
 enum BotCategories {
-  GAMBLING
-  OTHER
-  DATING
-  GAMES
-  CRYPTO
-  FUN
-  TECH
-  UTILITY
+  GAMBLING      // Гэмблинг
+  OTHER         // Другое 
+  DATING        // Знакомства
+  GAMES         // Игры
+  CRYPTO        // Крипто
+  FUN           // Развлечения
+  TECH          // Технологии/нейросети
+  UTILITY       // Утилиты/Продуктивность
 }
 
 model BotSeller {
@@ -57,19 +57,21 @@ model BotSeller {
   usersData Json
   description String?
   createdAt DateTime @default(now())
-  fixedPrice Float?
-  subscriberPrice Float?
+  fixedPrice Float?                        // фикс цена за всю рассылку
+  subscriberPrice Float?                   // за 1 подписаного подпищика на канал рассылки
   link String
   isActive Boolean @default(false)
   acceptStatus BotSellerStatus @default(PENDING)
   category BotCategories
   isChannel Boolean @default(false)
+  channelId String?                        // ID канала, если isChannel = true
+  statisticsFilePath String?               // путь к файлу статистики бота
 
   // Bot statistics
-  botLiveAudience Int? @default(0)
-  botMonthlyActiveUsers Int? @default(0)
+  botLiveAudience Int? @default(0)         //  живые люди
+  botMonthlyActiveUsers Int? @default(0)   // мау
 
-  lastMailingPeopleIncome Int? @default(0)
+  lastMailingPeopleIncome Int? @default(0) // 
   lastMailingDate DateTime?
   lastMailingMoneyIncome Int? @default(0)
 
@@ -78,15 +80,12 @@ model BotSeller {
   channelDaylyActiveUsers Int? @default(0)
   channelDailyPeopleIncome Int? @default(0)
 
-
-
   user User @relation(fields: [userId], references: [id])
 
   mailingReservations MailingReservation[]
 
   MailingTargetBots MailingTargetBots[]
 }
-
 
 model MailingReservation {
   id Int @id @default(autoincrement())
@@ -107,7 +106,6 @@ model Mailing {
   status MailingStatus @default(PENDING)
   isActive Boolean @default(false)
 
-
   // post
   postContent String
   postButtons Json
@@ -116,7 +114,6 @@ model Mailing {
 
   user User @relation(fields: [userId], references: [id])
   
-
   mailingReservations MailingReservation[]
 
   MailingTargetBots MailingTargetBots[]

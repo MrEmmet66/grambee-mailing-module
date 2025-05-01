@@ -1,7 +1,10 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { BotSellersService } from './bot-sellers.service';
 import { CreateBotSellerDto, UpdateBotSellerDto } from './dto';
-import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse, ApiConsumes } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { extname } from 'path';
 
 @ApiTags('Bot Sellers')
 @Controller('bot-sellers')
@@ -10,10 +13,39 @@ export class BotSellersController {
 
   @Post()
   @ApiOperation({ summary: 'Создание нового продавца ботов' })
+  @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateBotSellerDto })
   @ApiResponse({ status: 201, description: 'Продавец бота успешно создан' })
-  create(@Body() createBotSellerDto: CreateBotSellerDto) {
-    return this.botSellersService.create(createBotSellerDto);
+  @UseInterceptors(
+    FileInterceptor('statisticsFile', {
+      storage: diskStorage({
+        destination: './uploads/bot_users',
+        filename: (req, file, callback) => {
+          const botToken = req.body.botToken;
+          const sanitizedToken = botToken ? botToken.replace(/[^a-zA-Z0-9]/g, '_') : '';
+          const fileName = `${sanitizedToken}_statistics${extname(file.originalname)}`;
+          callback(null, fileName);
+        },
+      }),
+      fileFilter: (req, file, callback) => {
+        if (file.mimetype !== 'text/plain' && !file.originalname.toLowerCase().endsWith('.txt')) {
+          return callback(new Error('Только .txt файлы разрешены'), false);
+        }
+        if (parseInt(req.headers['content-length']) > 5 * 1024 * 1024) {
+          return callback(new Error('Максимальный размер файла - 5MB'), false);
+        }
+        callback(null, true);
+      },
+      limits: {
+        fileSize: 5 * 1024 * 1024,
+      }
+    }),
+  )
+  create(
+    @Body() createBotSellerDto: CreateBotSellerDto,
+    @UploadedFile() statisticsFile?: Express.Multer.File,
+  ) {
+    return this.botSellersService.create(createBotSellerDto, statisticsFile);
   }
 
   @Get()
@@ -71,6 +103,14 @@ export class BotSellersController {
     return this.botSellersService.updateStatus(+id, status);
   }
 
+  @Post(':id/regenerate-api-key')
+  @ApiOperation({ summary: 'Регенерация API ключа для продавца бота' })
+  @ApiParam({ name: 'id', description: 'ID продавца бота' })
+  @ApiResponse({ status: 200, description: 'API ключ успешно обновлен' })
+  regenerateApiKey(@Param('id') id: string) {
+    return this.botSellersService.regenerateApiKey(+id);
+  }
+
   @Patch(':id/statistics')
   @ApiOperation({ summary: 'Обновление статистики продавца бота' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })
@@ -110,11 +150,82 @@ export class BotSellersController {
     return this.botSellersService.updateStatistics(+id, statistics);
   }
 
+  @Patch(':id/category')
+  @ApiOperation({ summary: 'Обновление категории бота' })
+  @ApiParam({ name: 'id', description: 'ID продавца бота' })
+  @ApiBody({ 
+    schema: {
+      type: 'object',
+      properties: {
+        category: {
+          type: 'string',
+          enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'],
+          description: 'Новая категория бота'
+        }
+      }
+    }
+  })
+  @ApiResponse({ status: 200, description: 'Категория бота обновлена' })
+  updateCategory(
+    @Param('id') id: string, 
+    @Body('category') category: 'GAMBLING' | 'OTHER' | 'DATING' | 'GAMES' | 'CRYPTO' | 'FUN' | 'TECH' | 'UTILITY'
+  ) {
+    return this.botSellersService.updateCategory(+id, category);
+  }
+
   @Delete(':id')
   @ApiOperation({ summary: 'Удаление продавца бота' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })
   @ApiResponse({ status: 200, description: 'Продавец бота успешно удален' })
   remove(@Param('id') id: string) {
     return this.botSellersService.remove(+id);
+  }
+
+  @Post(':id/upload-statistics')
+  @ApiOperation({ summary: 'Загрузка файла статистики для бота' })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'id', description: 'ID продавца бота' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        statisticsFile: {
+          type: 'string',
+          format: 'binary',
+          description: 'Файл статистики пользователей (.txt)'
+        }
+      }
+    }
+  })
+  @ApiResponse({ status: 200, description: 'Файл статистики успешно загружен' })
+  @UseInterceptors(
+    FileInterceptor('statisticsFile', {
+      storage: diskStorage({
+        destination: './uploads/bot_users',
+        filename: (req, file, callback) => {
+          const botSellerId = req.params.id;
+          const fileName = `botSeller_${botSellerId}_statistics${extname(file.originalname)}`;
+          callback(null, fileName);
+        },
+      }),
+      fileFilter: (req, file, callback) => {
+        if (file.mimetype !== 'text/plain' && !file.originalname.toLowerCase().endsWith('.txt')) {
+          return callback(new Error('Только .txt файлы разрешены'), false);
+        }
+        if (parseInt(req.headers['content-length']) > 5 * 1024 * 1024) {
+          return callback(new Error('Максимальный размер файла - 5MB'), false);
+        }
+        callback(null, true);
+      },
+      limits: {
+        fileSize: 5 * 1024 * 1024,
+      }
+    }),
+  )
+  uploadStatistics(
+    @Param('id') id: string,
+    @UploadedFile() statisticsFile: Express.Multer.File,
+  ) {
+    return this.botSellersService.uploadStatistics(+id, statisticsFile);
   }
 } 
