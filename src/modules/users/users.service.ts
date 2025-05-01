@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto';
 
@@ -7,8 +7,15 @@ export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async create(createUserDto: CreateUserDto) {
+    if (!createUserDto.telegramId) {
+      throw new BadRequestException('telegramId is required');
+    }
+    
     return this.prisma.user.create({
-      data: createUserDto,
+      data: {
+        telegramId: createUserDto.telegramId,
+        username: createUserDto.username,
+      },
     });
   }
 
