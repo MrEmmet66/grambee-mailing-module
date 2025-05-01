@@ -9,20 +9,6 @@ import * as readline from 'readline';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 
-// Интерфейс для пользователя Telegram
-interface TelegramUser {
-  id: number;
-  first_name: string;
-  last_name?: string;
-  username?: string;
-  language_code?: string;
-}
-
-interface UserLanguageData {
-  userId: string;
-  languageCode: string | null;
-}
-
 @Injectable()
 export class BotSellersService {
   private readonly logger = new Logger(BotSellersService.name);
@@ -39,18 +25,15 @@ export class BotSellersService {
     }
   }
 
-  // Generate unique API key
   private generateApiKey(): string {
     return crypto.randomBytes(16).toString('hex');
   }
 
   private validateBotToken(token: string): boolean {
-    // Bot tokens are usually in the format: 123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
     const botTokenRegex = /^\d+:[A-Za-z0-9_-]{35,}$/;
     return botTokenRegex.test(token);
   }
 
-  // Validate statistics file content
   private async validateStatisticsFile(filePath: string): Promise<boolean> {
     return new Promise((resolve, reject) => {
       const fileStream = fs.createReadStream(filePath);
@@ -66,23 +49,36 @@ export class BotSellersService {
         lineNumber++;
         const trimmedLine = line.trim();
         
-        // Пропускаем пустые строки
         if (!trimmedLine) return;
         
-        // Проверяем, что строка содержит только цифры
-        if (!/^\d+$/.test(trimmedLine)) {
+        const parts = trimmedLine.split(':');
+        if (parts.length !== 2) {
           isValid = false;
           rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${trimmedLine}". Only numbers are allowed.`));
+          reject(new BadRequestException(`Invalid format at line ${lineNumber}: "${trimmedLine}". Expected format: telegram_id:lang_code`));
           return;
         }
         
-        // Проверяем длину Telegram ID (обычно от 9 до 10 цифр)
-        // Пример: 7513657022
-        if (trimmedLine.length < 9 || trimmedLine.length > 10) {
+        const [telegramId, langCode] = parts;
+        
+        if (!/^\d+$/.test(telegramId)) {
           isValid = false;
           rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${trimmedLine}". ID should be 9-10 digits.`));
+          reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
+          return;
+        }
+        
+        if (telegramId.length < 9 || telegramId.length > 10) {
+          isValid = false;
+          rl.close();
+          reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
+          return;
+        }
+        
+        if (!/^[a-zA-Z]{1,2}$/.test(langCode)) {
+          isValid = false;
+          rl.close();
+          reject(new BadRequestException(`Invalid language code at line ${lineNumber}: "${langCode}". Language code should be 1-2 letters.`));
           return;
         }
       });
