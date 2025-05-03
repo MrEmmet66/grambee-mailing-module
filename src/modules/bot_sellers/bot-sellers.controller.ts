@@ -63,6 +63,14 @@ export class BotSellersController {
     return this.botSellersService.findByUserId(+userId);
   }
 
+  @Get('telegram/:telegramId')
+  @ApiOperation({ summary: 'Получение продавцов ботов по Telegram ID пользователя' })
+  @ApiParam({ name: 'telegramId', description: 'Telegram ID пользователя' })
+  @ApiResponse({ status: 200, description: 'Список продавцов ботов пользователя' })
+  findByTelegramId(@Param('telegramId') telegramId: string) {
+    return this.botSellersService.findByTelegramId(telegramId);
+  }
+
   @Get(':id')
   @ApiOperation({ summary: 'Получение продавца бота по ID' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })

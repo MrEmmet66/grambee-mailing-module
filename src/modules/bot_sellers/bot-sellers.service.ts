@@ -51,15 +51,7 @@ export class BotSellersService {
         
         if (!trimmedLine) return;
         
-        const parts = trimmedLine.split(':');
-        if (parts.length !== 2) {
-          isValid = false;
-          rl.close();
-          reject(new BadRequestException(`Invalid format at line ${lineNumber}: "${trimmedLine}". Expected format: telegram_id:lang_code`));
-          return;
-        }
-        
-        const [telegramId, langCode] = parts;
+        const telegramId = trimmedLine.includes(':') ? trimmedLine.split(':')[0] : trimmedLine;
         
         if (!/^\d+$/.test(telegramId)) {
           isValid = false;
@@ -72,13 +64,6 @@ export class BotSellersService {
           isValid = false;
           rl.close();
           reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
-          return;
-        }
-        
-        if (!/^[a-zA-Z]{1,2}$/.test(langCode)) {
-          isValid = false;
-          rl.close();
-          reject(new BadRequestException(`Invalid language code at line ${lineNumber}: "${langCode}". Language code should be 1-2 letters.`));
           return;
         }
       });
@@ -141,6 +126,18 @@ export class BotSellersService {
     if (!userExists) {
       throw new BadRequestException(`User with id ${userId} not found`);
     }
+  }
+
+  private async getUserByTelegramId(telegramId: string): Promise<number> {
+    const user = await this.prisma.user.findUnique({
+      where: { telegramId }
+    });
+
+    if (!user) {
+      throw new BadRequestException(`User with Telegram ID ${telegramId} not found`);
+    }
+
+    return user.id;
   }
 
   private async validateChannelAccess(botToken: string, channelId: string): Promise<void> {
@@ -231,7 +228,16 @@ export class BotSellersService {
   }
 
   async create(createBotSellerDto: CreateBotSellerDto, statisticsFile?: Express.Multer.File) {
-    await this.validateUser(createBotSellerDto.userId);
+    let userId: number;
+
+    if (createBotSellerDto.userId) {
+      await this.validateUser(createBotSellerDto.userId);
+      userId = createBotSellerDto.userId;
+    } else if (createBotSellerDto.telegramId) {
+      userId = await this.getUserByTelegramId(createBotSellerDto.telegramId);
+    } else {
+      throw new BadRequestException('Either userId or telegramId must be provided');
+    }
 
     if (!this.validateBotToken(createBotSellerDto.botToken)) {
       throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
@@ -253,15 +259,23 @@ export class BotSellersService {
     const apiKey = this.generateApiKey();
     const statisticsFilePath = await this.handleStatisticsFile(statisticsFile);
 
+    const botSellerData = {
+      ...createBotSellerDto,
+      userId,
+      apiKey,
+      acceptStatus: 'PENDING',
+      statisticsFilePath,
+      usersData: createBotSellerDto.usersData || {},
+      channelId: createBotSellerDto.isChannel ? createBotSellerDto.channelId : null,
+      category: createBotSellerDto.category || 'OTHER'
+    };
+
+    if ('telegramId' in botSellerData) {
+      delete botSellerData.telegramId;
+    }
+
     const botSeller = await this.prisma.botSeller.create({
-      data: {
-        ...createBotSellerDto,
-        apiKey,
-        acceptStatus: 'PENDING',
-        statisticsFilePath,
-        usersData: {},
-        channelId: createBotSellerDto.isChannel ? createBotSellerDto.channelId : null
-      } as any,
+      data: botSellerData as any,
     });
 
     try {
@@ -311,6 +325,24 @@ export class BotSellersService {
   async findByUserId(userId: number) {
     return this.prisma.botSeller.findMany({
       where: { userId },
+      include: {
+        user: true,
+      },
+    });
+  }
+
+  async findByTelegramId(telegramId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { telegramId },
+      select: { id: true }
+    });
+
+    if (!user) {
+      return [];
+    }
+
+    return this.prisma.botSeller.findMany({
+      where: { userId: user.id },
       include: {
         user: true,
       },

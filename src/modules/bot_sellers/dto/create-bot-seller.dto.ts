@@ -3,10 +3,17 @@ import { IsNotEmpty, IsNumber, IsString, IsOptional, IsBoolean, IsEnum, Matches,
 import { BotCategories } from '@prisma/client';
 
 export class CreateBotSellerDto {
-  @ApiProperty({ description: 'ID пользователя, которому принадлежит бот' })
+  @ApiProperty({ description: 'ID пользователя, которому принадлежит бот', required: false })
   @IsNumber()
-  @IsNotEmpty()
-  userId: number;
+  @IsOptional()
+  @ValidateIf(o => !o.telegramId)
+  userId?: number;
+
+  @ApiProperty({ description: 'Telegram ID пользователя, которому принадлежит бот', required: false })
+  @IsString()
+  @IsOptional()
+  @ValidateIf(o => !o.userId)
+  telegramId?: string;
 
   @ApiProperty({ description: 'Токен бота Telegram' })
   @IsString()
@@ -47,11 +54,12 @@ export class CreateBotSellerDto {
 
   @ApiProperty({ 
     description: 'Категория бота',
-    enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY']
+    enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'],
+    required: false
   })
   @IsEnum(BotCategories)
-  @IsNotEmpty()
-  category: BotCategories;
+  @IsOptional()
+  category?: BotCategories;
 
   @ApiProperty({ description: 'Является ли бот каналом', default: false, required: false })
   @IsBoolean()
