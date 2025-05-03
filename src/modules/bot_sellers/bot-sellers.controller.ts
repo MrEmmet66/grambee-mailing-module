@@ -45,6 +45,16 @@ export class BotSellersController {
     @Body() createBotSellerDto: CreateBotSellerDto,
     @UploadedFile() statisticsFile?: Express.Multer.File,
   ) {
+    // Form data often sends boolean values as strings, so we need to convert explicitly
+    if (createBotSellerDto.isChannel !== undefined) {
+      // Convert string 'true'/'false' to boolean
+      if (typeof createBotSellerDto.isChannel === 'string') {
+        createBotSellerDto.isChannel = createBotSellerDto.isChannel === 'true';
+      }
+    }
+    
+    console.log('Controller received isChannel:', createBotSellerDto.isChannel);
+    
     return this.botSellersService.create(createBotSellerDto, statisticsFile);
   }
 

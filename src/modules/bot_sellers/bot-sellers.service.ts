@@ -142,6 +142,11 @@ export class BotSellersService {
 
   private async validateChannelAccess(botToken: string, channelId: string): Promise<void> {
     try {
+      // Skip validation completely if channelId is null or undefined
+      if (!channelId) {
+        return;
+      }
+      
       const channelInfoResponse = await axios.get(
         `https://api.telegram.org/bot${botToken}/getChat?chat_id=${channelId}`
       );
@@ -230,6 +235,10 @@ export class BotSellersService {
   async create(createBotSellerDto: CreateBotSellerDto, statisticsFile?: Express.Multer.File) {
     let userId: number;
 
+    // Debug log to see the incoming DTO
+    this.logger.debug(`Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`);
+    this.logger.debug(`isChannel type: ${typeof createBotSellerDto.isChannel}, value: ${createBotSellerDto.isChannel}`);
+
     if (createBotSellerDto.userId) {
       await this.validateUser(createBotSellerDto.userId);
       userId = createBotSellerDto.userId;
@@ -243,13 +252,17 @@ export class BotSellersService {
       throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
     }
 
-    if (createBotSellerDto.isChannel && !createBotSellerDto.channelId) {
-      throw new BadRequestException('Channel ID is required when isChannel is true');
-    }
+    // Handle the isChannel value properly - make sure it's a boolean
+    const isChannel = createBotSellerDto.isChannel === true;
+    this.logger.debug(`Processed isChannel: ${isChannel}`);
 
     await this.getBotInfo(createBotSellerDto.botToken);
 
-    if (createBotSellerDto.isChannel && createBotSellerDto.channelId) {
+    // Only validate channel access if isChannel is true and channelId is provided
+    if (isChannel) {
+      if (!createBotSellerDto.channelId) {
+        throw new BadRequestException('Channel ID is required when isChannel is true');
+      }
       await this.validateChannelAccess(createBotSellerDto.botToken, createBotSellerDto.channelId);
     }
 
@@ -259,6 +272,7 @@ export class BotSellersService {
     const apiKey = this.generateApiKey();
     const statisticsFilePath = await this.handleStatisticsFile(statisticsFile);
 
+    // Create a new object with all properties from the DTO, excluding unwanted fields
     const botSellerData = {
       ...createBotSellerDto,
       userId,
@@ -266,13 +280,18 @@ export class BotSellersService {
       acceptStatus: 'PENDING',
       statisticsFilePath,
       usersData: createBotSellerDto.usersData || {},
-      channelId: createBotSellerDto.isChannel ? createBotSellerDto.channelId : null,
+      isChannel: isChannel, // Make sure to use the processed boolean value
+      // Only set channelId if isChannel is true and channelId is provided
+      channelId: isChannel ? createBotSellerDto.channelId : null,
       category: createBotSellerDto.category || 'OTHER'
     };
 
+    // Remove telegramId from data sent to Prisma as it's not in the BotSeller model
     if ('telegramId' in botSellerData) {
       delete botSellerData.telegramId;
     }
+
+    this.logger.debug(`Final bot seller data: ${JSON.stringify(botSellerData)}`);
 
     const botSeller = await this.prisma.botSeller.create({
       data: botSellerData as any,
