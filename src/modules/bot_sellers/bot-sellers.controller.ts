@@ -45,6 +45,9 @@ export class BotSellersController {
     @Body() createBotSellerDto: CreateBotSellerDto,
     @UploadedFile() statisticsFile?: Express.Multer.File,
   ) {
+    console.log('Received file:', statisticsFile);
+    console.log('Received body:', createBotSellerDto);
+    
     return this.botSellersService.create(createBotSellerDto, statisticsFile);
   }
 
