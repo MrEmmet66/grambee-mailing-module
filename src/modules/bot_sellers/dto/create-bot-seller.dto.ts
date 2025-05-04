@@ -73,7 +73,7 @@ export class CreateBotSellerDto {
     required: false 
   })
   @IsOptional()
-  statisticsFile?: any;
+  statisticsFile?: Express.Multer.File;
 
   @IsString()
   @ValidateIf(o => o.isChannel === true)

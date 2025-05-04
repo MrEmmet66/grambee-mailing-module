@@ -21,11 +21,6 @@ if (!existsSync(uploadDir)) {
     forwardRef(() => TelegramModule),
     ConfigModule,
     HttpModule,
-    MulterModule.register({
-      storage: diskStorage({
-        destination: uploadDir,
-      }),
-    }),
   ],
   controllers: [BotSellersController],
   providers: [BotSellersService],

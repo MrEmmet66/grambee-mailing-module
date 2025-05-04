@@ -19,6 +19,8 @@ services:
     # Wait for database to be ready before starting the app
     command: >
       sh -c "npx prisma migrate deploy && npm run start"
+    volumes:
+      - ./uploads:/app/uploads
 
   postgres:
     container_name: postgres

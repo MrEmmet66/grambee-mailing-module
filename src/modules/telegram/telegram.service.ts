@@ -1,4 +1,4 @@
-import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus, forwardRef, Inject } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
@@ -7,6 +7,7 @@ import { Context, Telegraf, NarrowedContext } from 'telegraf';
 import { CallbackQuery, Update } from 'telegraf/typings/core/types/typegram';
 import { Mailing, BotSeller } from '@prisma/client';
 import { text } from 'stream/consumers';
+import { MailingService } from '../mailing/mailing.service';
 
 @Injectable()
 export class TelegramService {
@@ -14,7 +15,9 @@ export class TelegramService {
 
   constructor(
     private readonly httpService: HttpService, 
-    private configService: ConfigService, 
+    private configService: ConfigService,
+    @Inject(forwardRef(() => MailingService))
+    private readonly mailingService: MailingService,
     @InjectBot() private readonly bot: Telegraf<Context>
   ) {}
 
@@ -22,6 +25,7 @@ export class TelegramService {
   setBotSellersService(botSellersService: any) {
     this.botSellersService = botSellersService;
   }
+
 
   async sendMailingApplication(mailing: Mailing) {
     const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "-1002677251791";
@@ -262,6 +266,16 @@ export class TelegramService {
       const mailingId = this.extractMailingId(ctx);
       console.log(`Confirming mailing application: ${mailingId}`);
       
+      // Update the mailing status in the database
+      try {
+        await this.mailingService.updateMailingStatus(Number(mailingId), 'APPROVED');
+        console.log(`Mailing ${mailingId} status updated to APPROVED`);
+      } catch (error) {
+        console.error(`Error updating mailing status in database: ${error.message}`);
+        await ctx.answerCbQuery(`Ошибка обновления статуса в базе данных: ${error.message}`);
+        return false;
+      }
+      
       await ctx.answerCbQuery(`✅ Заявка на рассылку #${mailingId} подтверждена`);
       
       const message = 
@@ -274,8 +288,6 @@ export class TelegramService {
         reply_markup: undefined,
         parse_mode: 'HTML'
       });
-      
-      // TODO: Добавить обновление статуса рассылки в базе данных
       
       return true;
     } catch (error) {
@@ -294,6 +306,16 @@ export class TelegramService {
       const mailingId = this.extractMailingId(ctx);
       console.log(`Rejecting mailing application: ${mailingId}`);
       
+      // Update the mailing status in the database
+      try {
+        await this.mailingService.updateMailingStatus(Number(mailingId), 'REJECTED');
+        console.log(`Mailing ${mailingId} status updated to REJECTED`);
+      } catch (error) {
+        console.error(`Error updating mailing status in database: ${error.message}`);
+        await ctx.answerCbQuery(`Ошибка обновления статуса в базе данных: ${error.message}`);
+        return false;
+      }
+      
       await ctx.answerCbQuery(`❌ Заявка на рассылку #${mailingId} отклонена`);
       
       const message = 
@@ -306,8 +328,6 @@ export class TelegramService {
         reply_markup: undefined,
         parse_mode: 'HTML'
       });
-      
-      // TODO: Добавить обновление статуса рассылки в базе данных
       
       return true;
     } catch (error) {
@@ -326,6 +346,16 @@ export class TelegramService {
       const mailingId = this.extractMailingId(ctx);
       console.log(`Setting mailing application to waiting: ${mailingId}`);
       
+      // Update the mailing status in the database
+      try {
+        await this.mailingService.updateMailingStatus(Number(mailingId), 'WAITING');
+        console.log(`Mailing ${mailingId} status updated to WAITING`);
+      } catch (error) {
+        console.error(`Error updating mailing status in database: ${error.message}`);
+        await ctx.answerCbQuery(`Ошибка обновления статуса в базе данных: ${error.message}`);
+        return false;
+      }
+      
       await ctx.answerCbQuery(`⏳ Заявка на рассылку #${mailingId} отправлена в ожидание`);
       
       const message = 
@@ -338,8 +368,6 @@ export class TelegramService {
         reply_markup: undefined,
         parse_mode: 'HTML'
       });
-      
-      // TODO: Добавить обновление статуса рассылки в базе данных
       
       return true;
     } catch (error) {

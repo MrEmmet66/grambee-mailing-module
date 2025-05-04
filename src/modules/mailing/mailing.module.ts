@@ -5,6 +5,7 @@ https://docs.nestjs.com/modules
 import { Module } from '@nestjs/common';
 import { MailingController } from './mailing.controller';
 import { MailingService } from './mailing.service';
+import { MailingScheduleService } from './mailingSchedue.service';
 import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
@@ -12,13 +13,14 @@ import { PrismaModule } from 'prisma/prisma.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { HttpModule } from '@nestjs/axios';
 import { ConfigModule } from '@nestjs/config';
+import { forwardRef } from '@nestjs/common';
 
 @Module({
     imports: [
+        forwardRef(() => TelegramModule),
         ConfigModule,
         HttpModule,
         PrismaModule,
-        TelegramModule,
         MulterModule.register({
             storage: diskStorage({
                 destination: './uploads',
@@ -31,6 +33,7 @@ import { ConfigModule } from '@nestjs/config';
         }),
     ],
     controllers: [MailingController],
-    providers: [MailingService],
+    providers: [MailingService, MailingScheduleService],
+    exports: [MailingService, MailingScheduleService],
 })
 export class MailingModule {}
