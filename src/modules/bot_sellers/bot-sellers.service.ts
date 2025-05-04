@@ -9,20 +9,6 @@ import * as readline from 'readline';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 
-// Интерфейс для пользователя Telegram
-interface TelegramUser {
-  id: number;
-  first_name: string;
-  last_name?: string;
-  username?: string;
-  language_code?: string;
-}
-
-interface UserLanguageData {
-  userId: string;
-  languageCode: string | null;
-}
-
 @Injectable()
 export class BotSellersService {
   private readonly logger = new Logger(BotSellersService.name);
@@ -39,18 +25,15 @@ export class BotSellersService {
     }
   }
 
-  // Generate unique API key
   private generateApiKey(): string {
     return crypto.randomBytes(16).toString('hex');
   }
 
   private validateBotToken(token: string): boolean {
-    // Bot tokens are usually in the format: 123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi
     const botTokenRegex = /^\d+:[A-Za-z0-9_-]{35,}$/;
     return botTokenRegex.test(token);
   }
 
-  // Validate statistics file content
   private async validateStatisticsFile(filePath: string): Promise<boolean> {
     return new Promise((resolve, reject) => {
       const fileStream = fs.createReadStream(filePath);
@@ -66,23 +49,21 @@ export class BotSellersService {
         lineNumber++;
         const trimmedLine = line.trim();
         
-        // Пропускаем пустые строки
         if (!trimmedLine) return;
         
-        // Проверяем, что строка содержит только цифры
-        if (!/^\d+$/.test(trimmedLine)) {
+        const telegramId = trimmedLine.includes(':') ? trimmedLine.split(':')[0] : trimmedLine;
+        
+        if (!/^\d+$/.test(telegramId)) {
           isValid = false;
           rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${trimmedLine}". Only numbers are allowed.`));
+          reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
           return;
         }
         
-        // Проверяем длину Telegram ID (обычно от 9 до 10 цифр)
-        // Пример: 7513657022
-        if (trimmedLine.length < 9 || trimmedLine.length > 10) {
+        if (telegramId.length < 9 || telegramId.length > 10) {
           isValid = false;
           rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${trimmedLine}". ID should be 9-10 digits.`));
+          reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
           return;
         }
       });
@@ -147,8 +128,25 @@ export class BotSellersService {
     }
   }
 
+  private async getUserByTelegramId(telegramId: string): Promise<number> {
+    const user = await this.prisma.user.findUnique({
+      where: { telegramId }
+    });
+
+    if (!user) {
+      throw new BadRequestException(`User with Telegram ID ${telegramId} not found`);
+    }
+
+    return user.id;
+  }
+
   private async validateChannelAccess(botToken: string, channelId: string): Promise<void> {
     try {
+      // Skip validation completely if channelId is null or undefined
+      if (!channelId) {
+        return;
+      }
+      
       const channelInfoResponse = await axios.get(
         `https://api.telegram.org/bot${botToken}/getChat?chat_id=${channelId}`
       );
@@ -235,19 +233,36 @@ export class BotSellersService {
   }
 
   async create(createBotSellerDto: CreateBotSellerDto, statisticsFile?: Express.Multer.File) {
-    await this.validateUser(createBotSellerDto.userId);
+    let userId: number;
+
+    // Debug log to see the incoming DTO
+    this.logger.debug(`Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`);
+    this.logger.debug(`isChannel type: ${typeof createBotSellerDto.isChannel}, value: ${createBotSellerDto.isChannel}`);
+
+    if (createBotSellerDto.userId) {
+      await this.validateUser(createBotSellerDto.userId);
+      userId = createBotSellerDto.userId;
+    } else if (createBotSellerDto.telegramId) {
+      userId = await this.getUserByTelegramId(createBotSellerDto.telegramId);
+    } else {
+      throw new BadRequestException('Either userId or telegramId must be provided');
+    }
 
     if (!this.validateBotToken(createBotSellerDto.botToken)) {
       throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
     }
 
-    if (createBotSellerDto.isChannel && !createBotSellerDto.channelId) {
-      throw new BadRequestException('Channel ID is required when isChannel is true');
-    }
+    // Handle the isChannel value properly - make sure it's a boolean
+    const isChannel = createBotSellerDto.isChannel === true;
+    this.logger.debug(`Processed isChannel: ${isChannel}`);
 
     await this.getBotInfo(createBotSellerDto.botToken);
 
-    if (createBotSellerDto.isChannel && createBotSellerDto.channelId) {
+    // Only validate channel access if isChannel is true and channelId is provided
+    if (isChannel) {
+      if (!createBotSellerDto.channelId) {
+        throw new BadRequestException('Channel ID is required when isChannel is true');
+      }
       await this.validateChannelAccess(createBotSellerDto.botToken, createBotSellerDto.channelId);
     }
 
@@ -257,15 +272,29 @@ export class BotSellersService {
     const apiKey = this.generateApiKey();
     const statisticsFilePath = await this.handleStatisticsFile(statisticsFile);
 
+    // Create a new object with all properties from the DTO, excluding unwanted fields
+    const botSellerData = {
+      ...createBotSellerDto,
+      userId,
+      apiKey,
+      acceptStatus: 'PENDING',
+      statisticsFilePath,
+      usersData: createBotSellerDto.usersData || {},
+      isChannel: isChannel, // Make sure to use the processed boolean value
+      // Only set channelId if isChannel is true and channelId is provided
+      channelId: isChannel ? createBotSellerDto.channelId : null,
+      category: createBotSellerDto.category || 'OTHER'
+    };
+
+    // Remove telegramId from data sent to Prisma as it's not in the BotSeller model
+    if ('telegramId' in botSellerData) {
+      delete botSellerData.telegramId;
+    }
+
+    this.logger.debug(`Final bot seller data: ${JSON.stringify(botSellerData)}`);
+
     const botSeller = await this.prisma.botSeller.create({
-      data: {
-        ...createBotSellerDto,
-        apiKey,
-        acceptStatus: 'PENDING',
-        statisticsFilePath,
-        usersData: {},
-        channelId: createBotSellerDto.isChannel ? createBotSellerDto.channelId : null
-      } as any,
+      data: botSellerData as any,
     });
 
     try {
@@ -315,6 +344,24 @@ export class BotSellersService {
   async findByUserId(userId: number) {
     return this.prisma.botSeller.findMany({
       where: { userId },
+      include: {
+        user: true,
+      },
+    });
+  }
+
+  async findByTelegramId(telegramId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { telegramId },
+      select: { id: true }
+    });
+
+    if (!user) {
+      return [];
+    }
+
+    return this.prisma.botSeller.findMany({
+      where: { userId: user.id },
       include: {
         user: true,
       },

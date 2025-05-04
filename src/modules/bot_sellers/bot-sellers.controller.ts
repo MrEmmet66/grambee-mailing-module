@@ -45,8 +45,15 @@ export class BotSellersController {
     @Body() createBotSellerDto: CreateBotSellerDto,
     @UploadedFile() statisticsFile?: Express.Multer.File,
   ) {
-    console.log('Received file:', statisticsFile);
-    console.log('Received body:', createBotSellerDto);
+    // Form data often sends boolean values as strings, so we need to convert explicitly
+    if (createBotSellerDto.isChannel !== undefined) {
+      // Convert string 'true'/'false' to boolean
+      if (typeof createBotSellerDto.isChannel === 'string') {
+        createBotSellerDto.isChannel = createBotSellerDto.isChannel === 'true';
+      }
+    }
+    
+    console.log('Controller received isChannel:', createBotSellerDto.isChannel);
     
     return this.botSellersService.create(createBotSellerDto, statisticsFile);
   }
@@ -64,6 +71,14 @@ export class BotSellersController {
   @ApiResponse({ status: 200, description: 'Список продавцов ботов пользователя' })
   findByUserId(@Param('userId') userId: string) {
     return this.botSellersService.findByUserId(+userId);
+  }
+
+  @Get('telegram/:telegramId')
+  @ApiOperation({ summary: 'Получение продавцов ботов по Telegram ID пользователя' })
+  @ApiParam({ name: 'telegramId', description: 'Telegram ID пользователя' })
+  @ApiResponse({ status: 200, description: 'Список продавцов ботов пользователя' })
+  findByTelegramId(@Param('telegramId') telegramId: string) {
+    return this.botSellersService.findByTelegramId(telegramId);
   }
 
   @Get(':id')

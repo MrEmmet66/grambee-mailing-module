@@ -62,7 +62,7 @@ model BotSeller {
   link String
   isActive Boolean @default(false)
   acceptStatus BotSellerStatus @default(PENDING)
-  category BotCategories
+  category BotCategories @default(OTHER)
   isChannel Boolean @default(false)
   channelId String?                        // ID канала, если isChannel = true
   statisticsFilePath String?               // путь к файлу статистики бота

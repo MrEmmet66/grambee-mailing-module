@@ -9,6 +9,7 @@ import { BotSellersModule } from './modules/bot_sellers/bot-sellers.module';
 import { UsersModule } from './modules/users';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { ScheduleModule } from '@nestjs/schedule';
+import { BalanceModule } from './modules/balance/balance.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { ScheduleModule } from '@nestjs/schedule';
       timeout: 5000,
       maxRedirects: 5,
     }),
+    BalanceModule,
     PrismaModule,
     UsersModule,
     TelegramModule,

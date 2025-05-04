@@ -28,7 +28,7 @@ export class TelegramService {
 
 
   async sendMailingApplication(mailing: Mailing) {
-    const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "2677251791";
+    const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "-1002677251791";
     const applicationsTopicId = this.configService.get<number>('MAILING_APPLICATIONS_TOPIC_ID') || 12;
 
     const keyboardReplyMarkup = {
@@ -115,7 +115,7 @@ export class TelegramService {
   }
 
   async sendBotSellerApplication(botSeller: BotSeller) {
-    const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "2677251791";
+    const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "-1002677251791";
     const applicationsTopicId = this.configService.get<number>('BOT_APPLICATIONS_TOPIC_ID') || 9;
     
     console.log(`Sending bot seller application to chat ${chatId}, topic ${applicationsTopicId}, bot id: ${botSeller.id}`);
