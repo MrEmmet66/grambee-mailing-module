@@ -67,15 +67,6 @@ export class MailingController {
             throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
         }
 
-        let buttonsJson = dto.buttons || '[]';
-        
-        try {
-            JSON.parse(buttonsJson);
-        } catch (error) {
-            console.error('Error parsing buttons JSON:', error);
-            buttonsJson = '[]';
-        }
-        
         // Convert userId from string to integer if needed
         const userId = typeof dto.userId === 'string' ? parseInt(dto.userId, 10) : dto.userId;
         
@@ -85,7 +76,7 @@ export class MailingController {
             userId: userId,
             content: dto.content,
             mediaType: dto.mediaType || 'photo', // Default to photo if not specified
-            buttons: buttonsJson,
+            buttonContent: dto.buttonContent,
             media: file
         };
         
@@ -161,5 +152,33 @@ export class MailingController {
         @Body() body: { status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WAITING' }
     ) {
         return await this.mailingService.updateMailingStatus(parseInt(id, 10), body.status);
+    }
+
+    @Get('/user/:userId')
+    @ApiOperation({ summary: 'Получить все рассылки пользователя' })
+    @ApiParam({ name: 'userId', description: 'ID пользователя' })
+    @ApiResponse({ 
+        status: 200, 
+        description: 'Список рассылок пользователя.',
+        schema: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'number', example: 1 },
+                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
+                    userId: { type: 'number', example: 1 },
+                    content: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
+                    mediaType: { type: 'string', example: 'photo' },
+                    buttons: { type: 'string', example: '[{"text":"Перейти","url":"https://example.com"}]' },
+                    createdAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' },
+                    updatedAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' }
+                }
+            }
+        }
+    })
+    @ApiResponse({ status: 404, description: 'Пользователь не найден.' })
+    async getUserMailings(@Param('userId') userId: string) {
+        return await this.mailingService.getUserMailings(parseInt(userId, 10));
     }
 }

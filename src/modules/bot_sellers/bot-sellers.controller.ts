@@ -65,6 +65,26 @@ export class BotSellersController {
     return this.botSellersService.findAll();
   }
 
+  @Get('/paged')
+  @ApiOperation({ summary: 'Получение продавцов ботов с пагинацией' })
+  @ApiResponse({ status: 200, description: 'Список продавцов ботов с пагинацией' })
+  findAllPaged(
+    @Query('page') page: number = 1,
+    @Query('limit') limit: number = 10,
+    @Query('search') search: string = '',
+  ) {
+    return this.botSellersService.findAllPaged(page, limit, search);
+  }
+
+
+  @Get('mailing/:mailingId')
+  @ApiOperation({ summary: 'Получение продавцов ботов по ID рассылки' })
+  @ApiParam({ name: 'mailingId', description: 'ID рассылки' })
+  @ApiResponse({ status: 200, description: 'Список продавцов ботов для данной рассылки' })
+  findByMailingId(@Param('mailingId') mailingId: number) {
+    return this.botSellersService.findByMailingId(mailingId);
+  }
+
   @Get('user/:userId')
   @ApiOperation({ summary: 'Получение продавцов ботов по ID пользователя' })
   @ApiParam({ name: 'userId', description: 'ID пользователя' })

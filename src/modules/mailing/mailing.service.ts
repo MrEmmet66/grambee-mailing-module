@@ -29,25 +29,33 @@ export class MailingService {
         this.logger.log(`Creating mailing with data: ${JSON.stringify({
             userId: dto.userId,
             botToken: dto.botToken,
+            channelId: dto.channelId,
+            botLink: dto.botLink,
+            isChannel: !!dto.channelId,
             hasMedia: !!dto.media,
-            contentLength: dto.content?.length || 0
+            contentLength: dto.content?.length || 0,
+            buttonText: dto.buttonContent || 'No button'
         })}`);
-        
-        // Use the buttons JSON string directly since it's already a string
-        const jsonPostButtons = dto.buttons || '[]';
         
         // If there's a media file, use its path
         const mediaPath = dto.media ? `/uploads/${dto.media.filename}` : null;
         
         try {
+            // Determine if this is a channel mailing based on channelId presence
+            const isChannel = !!dto.channelId;
+            
+            // Store button text directly (no need for JSON parsing)
             const mailing = await this.prismaService.mailing.create({
                 data: {
                     botToken: dto.botToken,
                     userId: dto.userId,
+                    channelId: dto.channelId,
+                    botLink: dto.botLink,
+                    isChannel: isChannel,
                     postContent: dto.content,
                     postMediaType: dto.mediaType,
                     postMedia: mediaPath,
-                    postButtons: jsonPostButtons,
+                    postButtons: dto.buttonContent, // Just store the button text
                     status: 'PENDING'
                 }
             });
@@ -235,15 +243,27 @@ export class MailingService {
         // Parse filters
         const filters = JSON.parse(selectedFilters || '{}');
         
-        // Parse buttons from mailing
-        const buttons = JSON.parse(mailing.postButtons || '[]');
+        // Find the tracking link for this mailing-botSeller combination
+        const targetBot = await this.prismaService.mailingTargetBots.findFirst({
+            where: {
+                botSellerId: botSeller.id,
+                mailingId: mailing.id
+            }
+        });
+
+        // Get the invitation link to use in buttons
+        const inviteLink = targetBot?.link || botSeller.link;
+        
+        // Create button from the button text and the invite link
+        const buttonText = mailing.postButtons?.toString() || '';
+        const inlineKeyboard = this.createButtonWithInviteLink(buttonText, inviteLink);
         
         if (botSeller.isChannel) {
             // Send to channel
-            await this.sendToChannel(botSeller, mailing, buttons);
+            await this.sendToChannel(botSeller, mailing, inlineKeyboard);
         } else {
             // Send to bot users
-            await this.sendToBotUsers(botSeller, mailing, buttons, filters);
+            await this.sendToBotUsers(botSeller, mailing, inlineKeyboard, filters);
         }
 
         // Update mailing statistics
@@ -386,40 +406,14 @@ export class MailingService {
         });
     }
 
+    // Updated buildInlineKeyboard method to handle the new format
     buildInlineKeyboard(buttons) {
-        if (!buttons) {
-            return undefined;
+        // If it's already in the right format with inline_keyboard, return as is
+        if (buttons && typeof buttons === 'object' && buttons.inline_keyboard) {
+            return buttons;
         }
         
-        // If buttons is a string, parse it to JSON
-        let parsedButtons;
-        if (typeof buttons === 'string') {
-            try {
-                parsedButtons = JSON.parse(buttons);
-            } catch (error) {
-                this.logger.error(`Error parsing buttons JSON: ${error.message}`);
-                return undefined;
-            }
-        } else {
-            parsedButtons = buttons;
-        }
-        
-        if (!Array.isArray(parsedButtons) || parsedButtons.length === 0) {
-            return undefined;
-        }
-        
-        return {
-            inline_keyboard: parsedButtons.map(row => {
-                if (Array.isArray(row)) {
-                    return row.map(button => ({
-                        text: button.text,
-                        url: button.url,
-                        callback_data: button.callback_data
-                    }));
-                }
-                return [];
-            })
-        };
+        return undefined;
     }
 
     async sendTextMessage(botToken, chatId, text, inlineKeyboard) {
@@ -589,5 +583,24 @@ export class MailingService {
             where: { id: mailingId },
             data: { status }
         });
+    }
+
+    // New method to create a button with the invite link
+    createButtonWithInviteLink(buttonText: string, inviteLink: string) {
+        if (!buttonText || !inviteLink) {
+            return undefined;
+        }
+        
+        // Create a simple inline keyboard with one button
+        return {
+            inline_keyboard: [
+                [
+                    {
+                        text: buttonText,
+                        url: inviteLink
+                    }
+                ]
+            ]
+        };
     }
 }

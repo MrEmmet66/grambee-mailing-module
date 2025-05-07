@@ -31,8 +31,10 @@ CREATE TABLE "BotSeller" (
     "link" TEXT NOT NULL,
     "isActive" BOOLEAN NOT NULL DEFAULT false,
     "acceptStatus" "BotSellerStatus" NOT NULL DEFAULT 'PENDING',
-    "category" "BotCategories" NOT NULL,
+    "category" "BotCategories" NOT NULL DEFAULT 'OTHER',
     "isChannel" BOOLEAN NOT NULL DEFAULT false,
+    "channelId" TEXT,
+    "statisticsFilePath" TEXT,
     "botLiveAudience" INTEGER DEFAULT 0,
     "botMonthlyActiveUsers" INTEGER DEFAULT 0,
     "lastMailingPeopleIncome" INTEGER DEFAULT 0,
@@ -60,7 +62,10 @@ CREATE TABLE "MailingReservation" (
 CREATE TABLE "Mailing" (
     "id" SERIAL NOT NULL,
     "userId" INTEGER NOT NULL,
-    "botToken" TEXT NOT NULL,
+    "botToken" TEXT,
+    "channelId" TEXT,
+    "isChannel" BOOLEAN NOT NULL DEFAULT false,
+    "botLink" TEXT,
     "status" "MailingStatus" NOT NULL DEFAULT 'PENDING',
     "isActive" BOOLEAN NOT NULL DEFAULT false,
     "postContent" TEXT NOT NULL,
@@ -78,6 +83,7 @@ CREATE TABLE "MailingTargetBots" (
     "mailingId" INTEGER NOT NULL,
     "link" TEXT NOT NULL,
     "peopleInvited" INTEGER DEFAULT 0,
+    "paymentType" TEXT NOT NULL DEFAULT 'fixed',
 
     CONSTRAINT "MailingTargetBots_pkey" PRIMARY KEY ("id")
 );

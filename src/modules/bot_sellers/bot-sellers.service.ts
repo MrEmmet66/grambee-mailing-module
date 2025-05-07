@@ -29,6 +29,25 @@ export class BotSellersService {
     return crypto.randomBytes(16).toString('hex');
   }
 
+  async findByMailingId(mailingId: number) {
+    return await this.prisma.botSeller.findMany({
+      where: {
+        mailingReservations: {
+          some: {
+            id: mailingId,
+          },
+        },
+      },
+      include: {
+        MailingTargetBots: {
+          include: {
+            mailing: true,
+          }
+        }
+      },
+    });
+  }
+
   private validateBotToken(token: string): boolean {
     const botTokenRegex = /^\d+:[A-Za-z0-9_-]{35,}$/;
     return botTokenRegex.test(token);
@@ -77,6 +96,30 @@ export class BotSellersService {
       fileStream.on('error', (err) => {
         reject(new BadRequestException(`Error reading statistics file: ${err.message}`));
       });
+    });
+  }
+
+  async findAllPaged(page: number, limit: number, search: string) {
+    const skip = (page - 1) * limit;
+    const take = limit;
+
+    return this.prisma.botSeller.findMany({
+      where: {
+        AND: [
+          { acceptStatus: 'APPROVED' },
+
+
+        ], 
+        OR: [
+          { botToken: { contains: search, mode: 'insensitive' } },
+          { user: { username: { contains: search, mode: 'insensitive' } } },
+        ],
+      },
+      include: {
+        user: true,
+      },
+      skip,
+      take,
     });
   }
 

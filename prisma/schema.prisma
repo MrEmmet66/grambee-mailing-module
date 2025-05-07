@@ -101,7 +101,13 @@ model MailingReservation {
 model Mailing {
   id Int @id @default(autoincrement())
   userId Int
-  botToken String
+  botToken String?
+
+  channelId String? // ID канала, если isChannel = true
+  isChannel Boolean @default(false)
+
+  botLink String? // Ссылка на бота
+  
 
   status MailingStatus @default(PENDING)
   isActive Boolean @default(false)

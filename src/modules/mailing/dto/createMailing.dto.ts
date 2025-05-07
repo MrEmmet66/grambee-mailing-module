@@ -14,6 +14,20 @@ export class CreateMailingDto {
     userId: number;
 
     @ApiProperty({ 
+        description: 'ID канала, если рассылка для канала (isChannel = true)',
+        example: '-1001234567890',
+        required: false
+    })
+    channelId?: string;
+
+    @ApiProperty({
+        description: 'Ссылка на бота, если рассылка для бота (isChannel = false)',
+        example: 'https://t.me/example_bot',
+        required: false
+    })
+    botLink?: string;
+
+    @ApiProperty({ 
         description: 'Содержимое рассылки (текст)', 
         example: 'Привет! Это тестовая рассылка.'
     })
@@ -36,19 +50,22 @@ export class CreateMailingDto {
     media?: Express.Multer.File;
 
     @ApiProperty({ 
-        description: 'Кнопки для рассылки в формате JSON-строки',
+        description: 'Текст кнопки для рассылки',
         type: 'string',
-        example: '[{"text":"Перейти","url":"https://example.com"}]'
+        example: 'Перейти'
     })
-    buttons: string;
+    buttonContent: string;
 }
 
 // This interface represents the form data with file
 export interface CreateMailingFormData {
     botToken: string;
     userId: number;
+    channelId?: string;
+    botLink?: string;
+    isChannel?: boolean;
     content: string;
     mediaType?: string;
     media?: Express.Multer.File;
-    buttons: string;
+    buttonContent: string;
 }

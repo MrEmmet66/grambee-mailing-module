@@ -52,24 +52,10 @@ export class TelegramService {
       ]
     };
 
-    // Преобразование JSON кнопок в читаемый формат
-    let buttonsText = 'Нет';
-    try {
-      const buttonsData = mailing.postButtons ? mailing.postButtons.toString() : '[]';
-      const buttons = JSON.parse(buttonsData);
-      if (buttons && Array.isArray(buttons) && buttons.length > 0) {
-        buttonsText = buttons.map((row, i) => 
-          Array.isArray(row) ? 
-            row.map(btn => `[${btn.text}]`).join(' ') : 
-            ''
-        ).join('\n');
-      }
-    } catch (e) {
-      console.error('Error parsing buttons:', e);
-      buttonsText = 'Ошибка формата';
-    }
+    // Display button text directly - no need for JSON parsing
+    let buttonText = mailing.postButtons ? mailing.postButtons.toString() : 'Нет';
 
-    // Статус с эмодзи
+    // Status with emoji
     let statusEmoji = '';
     switch (mailing.status) {
       case 'PENDING':
@@ -86,10 +72,17 @@ export class TelegramService {
         break;
     }
 
+    // Determine if this is a channel or bot mailing
+    const targetType = mailing.isChannel ? 'Канал' : 'Бот';
+    const targetId = mailing.isChannel ? mailing.channelId : mailing.botToken;
+    const targetLink = mailing.isChannel ? 'Недоступно для канала' : (mailing.botLink || 'Не указана');
+
     const message = 
       `<b>📨 НОВАЯ ЗАЯВКА НА РАССЫЛКУ</b>\n\n` +
       `<b>👤 Пользователь:</b> #${mailing.userId}\n` +
-      `<b>🤖 ID бота:</b> <code>${mailing.botToken}</code>\n` +
+      `<b>🎯 Тип цели:</b> ${targetType}\n` +
+      `<b>🆔 ID ${targetType.toLowerCase()}а:</b> <code>${targetId}</code>\n` +
+      (mailing.isChannel ? '' : `<b>🔗 Ссылка на бота:</b> ${targetLink}\n`) +
       `<b>📅 Дата создания:</b> ${new Date().toLocaleString('ru-RU')}\n` +
       `<b>📊 Статус:</b> ${statusEmoji} ${mailing.status}\n\n` +
       `<b>📝 Контент:</b>\n<pre>${mailing.postContent}</pre>\n\n` +
@@ -98,7 +91,7 @@ export class TelegramService {
         `<b>📂 Тип медиа:</b> ${mailing.postMediaType || 'Не указан'}\n\n` : 
         ''
       ) +
-      `<b>🔘 Кнопки:</b>\n${buttonsText}`;
+      `<b>🔘 Текст кнопки:</b> ${buttonText}`;
 
     try {
       const sentMessage = await this.bot.telegram.sendMessage(chatId, message, {
