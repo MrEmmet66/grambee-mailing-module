@@ -25,6 +25,18 @@ export class MailingService {
         private configService: ConfigService,
     ) {}
 
+        getMailingsByDate(date: Date, sellerId: string) {
+        return this.prismaService.mailingReservation.findMany({
+            where: {
+                date: date,
+                botSellerId: Number(sellerId)
+            },
+            include: {
+                mailing: true
+            }
+        });
+    }
+
     async createMailing(dto: CreateMailingFormData) {
         this.logger.log(`Creating mailing with data: ${JSON.stringify({
             userId: dto.userId,

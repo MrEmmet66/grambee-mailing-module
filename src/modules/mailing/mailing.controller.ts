@@ -2,7 +2,7 @@
 https://docs.nestjs.com/controllers#controllers
 */
 
-import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req } from '@nestjs/common';
+import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query } from '@nestjs/common';
 import { MailingService } from './mailing.service';
 import { CreateMailingDto, CreateMailingFormData } from './dto/createMailing.dto';
 import { CreateMailingReservationDto } from './dto/createMailingReservation.dto';
@@ -181,4 +181,48 @@ export class MailingController {
     async getUserMailings(@Param('userId') userId: string) {
         return await this.mailingService.getUserMailings(parseInt(userId, 10));
     }
+
+    @Get('/date')
+    @ApiOperation({ summary: 'Получить все рассылки на определенную дату' })
+    @ApiResponse({ 
+        status: 200, 
+        description: 'Список рассылок на определенную дату.',
+        schema: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'number', example: 1 },
+                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
+                    userId: { type: 'number', example: 1 },
+                    content: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
+                    mediaType: { type: 'string', example: 'photo' },
+                    buttons: { type: 'string', example: '[{"text":"Перейти","url":"https://example.com"}]' },
+                    createdAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' },
+                    updatedAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' }
+                }
+            }
+        }
+    })
+    @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
+    async getMailingsByDate(@Query('date') date: string, @Query('sellerId') sellerId: string) {
+        // Validate sellerId
+        if (!sellerId) {
+            throw new HttpException('Seller ID is required', HttpStatus.BAD_REQUEST);
+        }
+        // Validate date format (YYYY-MM-DD)
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!dateRegex.test(date)) {
+            throw new HttpException('Invalid date format. Use YYYY-MM-DD.', HttpStatus.BAD_REQUEST);
+        }
+        // Parse date to Date object
+        const parsedDate = new Date(date);
+        if (isNaN(parsedDate.getTime())) {
+            throw new HttpException('Invalid date.', HttpStatus.BAD_REQUEST);
+        }
+
+        return await this.mailingService.getMailingsByDate(parsedDate, sellerId);
+    }
+
+    
 }
