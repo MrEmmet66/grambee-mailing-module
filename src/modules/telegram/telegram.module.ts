@@ -7,7 +7,7 @@ import { TelegrafModule } from 'nestjs-telegraf';
 import { BotSellersModule } from '../bot_sellers/bot-sellers.module';
 import { BotSellersService } from '../bot_sellers/bot-sellers.service';
 import { ModuleRef } from '@nestjs/core';
-import { MailingService } from '../mailing/mailing.service';
+import { MailingService } from '../mailing/services/mailing.service';
 import { MailingModule } from '../mailing/mailing.module';
 import { ApplicationsService } from './applications.service';
 

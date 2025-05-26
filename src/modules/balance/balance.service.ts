@@ -18,6 +18,8 @@ export class BalanceService {
     this.gatewayUrl = this.configService.get<string>('GATEWAY_URL', 'https://testgramserv.webaipay.ru');
   }
 
+  
+
   private async makeBalanceRequest(endpoint: string, data: any): Promise<GetBalanceResponseDto> {
     try {
       const response = await firstValueFrom(
@@ -39,6 +41,14 @@ export class BalanceService {
       }
       throw new BadRequestException(`Failed to process balance operation: ${error.message}`);
     }
+  }
+
+  async releaseBalance(telegramId: string, dto: BalanceOperationDto): Promise<GetBalanceResponseDto> {
+    return this.makeBalanceRequest(`/api/v1/balance/${telegramId}/release`, dto);
+  }
+
+  async holdWithdrawBalance(telegramId: string, dto: BalanceOperationDto): Promise<GetBalanceResponseDto> {
+    return this.makeBalanceRequest(`/api/v1/balance/${telegramId}/withdraw-from-hold`, dto);
   }
 
   async getBalance(telegramId: string): Promise<GetBalanceResponseDto> {

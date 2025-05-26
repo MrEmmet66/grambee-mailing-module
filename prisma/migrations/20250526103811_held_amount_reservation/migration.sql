@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "MailingReservation" ADD COLUMN     "heldAmount" DOUBLE PRECISION NOT NULL DEFAULT 0,
+ADD COLUMN     "paidAmount" DOUBLE PRECISION NOT NULL DEFAULT 0;

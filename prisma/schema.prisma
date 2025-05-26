@@ -36,6 +36,7 @@ enum MailingStatus {
   APPROVED
   REJECTED
   WAITING
+  COMPLETED
 }
 
 enum BotCategories {
@@ -93,9 +94,20 @@ model MailingReservation {
   botSellerId Int
   date DateTime
   selectedFilters Json
+  heldAmount Float @default(0) // Сумма, которая удерживается для рассылки
+  paidAmount Float @default(0) // Сумма, которая уже оплачена
+  trackingLink String?
+  peopleInvited Int @default(0) // Кол-во людей, которых пригласили на канал
+  isProcessed Boolean @default(false) // Флаг, что рассылка обработана
+  processedAt DateTime? // Дата, когда рассылка была обработана
+  adminApprovalStatus String @default("PENDING") // Статус одобрения админом
+
+
 
   mailing Mailing @relation(fields: [mailingId], references: [id])
   botSeller BotSeller @relation(fields: [botSellerId], references: [id])
+
+  MailingEntrances MailingEntrances[]
 }
 
 model Mailing {
@@ -136,20 +148,15 @@ model MailingTargetBots {
   botSeller BotSeller @relation(fields: [botSellerId], references: [id])
   mailing Mailing @relation(fields: [mailingId], references: [id])
 
-  MailingEntrances MailingEntrances[]
 }
 
 model MailingEntrances {
   id Int @id @default(autoincrement())
-  mailingTargetBotId Int
+  mailingReservationId Int
   userTelegramId Int
   date DateTime @default(now())
-  
-  
-  mailingTargetBot MailingTargetBots @relation(fields: [mailingTargetBotId], references: [id])
 
+  mailingReservation MailingReservation @relation(fields: [mailingReservationId], references: [id])
 }
-
-
 
 

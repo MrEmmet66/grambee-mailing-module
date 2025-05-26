@@ -3,7 +3,7 @@ https://docs.nestjs.com/controllers#controllers
 */
 
 import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query } from '@nestjs/common';
-import { MailingService } from './mailing.service';
+import { MailingService } from './services/mailing.service';
 import { CreateMailingDto, CreateMailingFormData } from './dto/createMailing.dto';
 import { CreateMailingReservationDto } from './dto/createMailingReservation.dto';
 import { FileInterceptor } from '@nestjs/platform-express';

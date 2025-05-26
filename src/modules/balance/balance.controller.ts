@@ -3,11 +3,9 @@ import { BalanceService } from './balance.service';
 import { ApiTags, ApiOperation, ApiParam, ApiResponse, ApiBody } from '@nestjs/swagger';
 import { GetBalanceResponseDto } from './dto/get-balance-response.dto';
 import { BalanceOperationDto } from './dto/balance-operation.dto';
-import { AuthGuard } from '@nestjs/passport';
 
 @ApiTags('Balance')
 @Controller('api/v1/balance')
-// @UseGuards(AuthGuard('jwt'))
 export class BalanceController {
   constructor(private readonly balanceService: BalanceService) {}
 

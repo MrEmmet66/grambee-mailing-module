@@ -4,7 +4,7 @@ https://docs.nestjs.com/modules
 
 import { Module } from '@nestjs/common';
 import { MailingController } from './mailing.controller';
-import { MailingService } from './mailing.service';
+import { MailingService } from './services/mailing.service';
 import { MailingScheduleService } from './mailingSchedue.service';
 import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';

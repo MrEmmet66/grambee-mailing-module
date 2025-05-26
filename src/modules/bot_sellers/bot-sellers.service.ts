@@ -62,25 +62,25 @@ export class BotSellersService {
         input: fileStream,
         crlfDelay: Infinity
       });
-      
+
       let lineNumber = 0;
       let isValid = true;
-      
+
       rl.on('line', (line) => {
         lineNumber++;
         const trimmedLine = line.trim();
-        
+
         if (!trimmedLine) return;
-        
+
         const telegramId = trimmedLine.includes(':') ? trimmedLine.split(':')[0] : trimmedLine;
-        
+
         if (!/^\d+$/.test(telegramId)) {
           isValid = false;
           rl.close();
           reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
           return;
         }
-        
+
         if (telegramId.length < 9 || telegramId.length > 10) {
           isValid = false;
           rl.close();
@@ -88,13 +88,13 @@ export class BotSellersService {
           return;
         }
       });
-      
+
       rl.on('close', () => {
         if (isValid) {
           resolve(true);
         }
       });
-      
+
       fileStream.on('error', (err) => {
         reject(new BadRequestException(`Error reading statistics file: ${err.message}`));
       });
@@ -111,7 +111,7 @@ export class BotSellersService {
           { acceptStatus: 'APPROVED' },
 
 
-        ], 
+        ],
         OR: [
           { botToken: { contains: search, mode: 'insensitive' } },
           { user: { username: { contains: search, mode: 'insensitive' } } },
@@ -128,16 +128,16 @@ export class BotSellersService {
   private async calculateMAU(botToken: string): Promise<number> {
     try {
       this.logger.log(`[MAU] Starting MAU calculation for bot ${botToken.slice(0, 10)}...`);
-      
+
       const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
       const updatesResponse = await axios.get(
         `https://api.telegram.org/bot${botToken}/getUpdates?offset=-1&limit=100&timeout=0`
       );
-      
+
       if (updatesResponse.data && updatesResponse.data.ok) {
         const updates = updatesResponse.data.result;
         const uniqueUsers = new Set();
-        
+
         for (const update of updates) {
           if (update.message && update.message.from) {
             uniqueUsers.add(update.message.from.id);
@@ -149,12 +149,12 @@ export class BotSellersService {
             uniqueUsers.add(update.inline_query.from.id);
           }
         }
-        
+
         const mau = uniqueUsers.size;
         this.logger.log(`[MAU] Calculated MAU: ${mau} unique users in the last 30 days`);
         return mau;
       }
-      
+
       this.logger.warn(`[MAU] Failed to get updates for MAU calculation`);
       return 0;
     } catch (error) {
@@ -191,11 +191,11 @@ export class BotSellersService {
       if (!channelId) {
         return;
       }
-      
+
       const channelInfoResponse = await axios.get(
         `https://api.telegram.org/bot${botToken}/getChat?chat_id=${channelId}`
       );
-      
+
       if (channelInfoResponse.data && channelInfoResponse.data.ok) {
         this.logger.log('Channel Information:');
         this.logger.log(JSON.stringify(channelInfoResponse.data.result, null, 2));
@@ -248,7 +248,7 @@ export class BotSellersService {
       const botInfoResponse = await axios.get(
         `https://api.telegram.org/bot${botToken}/getMe`
       );
-      
+
       if (botInfoResponse.data && botInfoResponse.data.ok) {
         this.logger.log('Basic Bot Information:');
         this.logger.log(JSON.stringify(botInfoResponse.data.result, null, 2));
@@ -351,32 +351,139 @@ export class BotSellersService {
   }
 
   async handleMailingEntrance(link: string, userId: number) {
-    const botSeller = await this.findBotSellerByLink(link);
+    this.logger.log(`Handling mailing entrance for user ${userId} with link: ${link}`);
 
-    const userMailingEntrance = await this.prisma.mailingEntrances.findFirst({
-      where: {
-        userTelegramId: userId,
-        mailingTargetBotId: botSeller?.id
+    let mailingReservation;
+
+    // Способ 1: Если это start параметр для бота (m{mailingId}_s{sellerId}_{timestamp})
+    if (link.includes('?start=')) {
+      const startParam = link.split('?start=')[1];
+
+      if (startParam && startParam.startsWith('m')) {
+        const match = startParam.match(/^m(\d+)_s(\d+)_/);
+
+        if (match) {
+          const mailingId = parseInt(match[1]);
+          const sellerId = parseInt(match[2]);
+
+          // Найти активную резервацию для этой рассылки и продавца
+          mailingReservation = await this.prisma.mailingReservation.findFirst({
+            where: {
+              mailingId: mailingId,
+              botSellerId: sellerId,
+              isProcessed: true, // Только обработанные резервации
+              adminApprovalStatus: { not: 'FROZEN' } // Исключить замороженные
+            }
+          });
+
+          this.logger.log(`Found reservation by start param: mailingId=${mailingId}, sellerId=${sellerId}`);
+        }
       }
-    });
+    }
+    // Способ 2: Если это прямая ссылка (invite link)
+    else {
+      mailingReservation = await this.prisma.mailingReservation.findFirst({
+        where: {
+          trackingLink: link,
+          isProcessed: true,
+          adminApprovalStatus: { not: 'FROZEN' }
+        }
+      });
 
-    if (userMailingEntrance) {
-      this.logger.log(`User ${userId} already has an entrance for bot ${botSeller?.id}`);
-      return userMailingEntrance;
+      this.logger.log(`Searching reservation by direct link: ${link}`);
     }
 
-    if (!botSeller) {
+    if (!mailingReservation) {
+      this.logger.warn(`No active mailing reservation found for link: ${link}`);
       return null;
     }
 
-    await this.prisma.mailingEntrances.create({
+    const now = new Date();
+    const fourHoursAgo = new Date(now.getTime() - 4 * 60 * 60 * 1000); // 4 часа назад
+
+    // Найти последний переход этого пользователя по этой резервации
+    const lastEntrance = await this.prisma.mailingEntrances.findFirst({
+      where: {
+        userTelegramId: userId,
+        mailingReservationId: mailingReservation.id
+      },
+      orderBy: {
+        date: 'desc'
+      }
+    });
+
+    // Проверить, прошло ли 4 часа с последнего перехода
+    if (lastEntrance && lastEntrance.date > fourHoursAgo) {
+      const timeLeft = Math.ceil((lastEntrance.date.getTime() + 4 * 60 * 60 * 1000 - now.getTime()) / (1000 * 60));
+      this.logger.log(`User ${userId} is in freeze period for reservation ${mailingReservation.id}. Time left: ${timeLeft} minutes`);
+
+      return {
+        success: false,
+        message: `Заморозка действует еще ${timeLeft} минут`,
+        timeLeft: timeLeft,
+        lastEntrance: lastEntrance,
+        canCreateNew: false
+      };
+    }
+
+    // Определить, первый ли это переход пользователя
+    const isFirstEntrance = !lastEntrance;
+
+    // Создать новую запись о переходе
+    const entrance = await this.prisma.mailingEntrances.create({
       data: {
         userTelegramId: userId,
-        mailingTargetBotId: botSeller?.id,
-      },
+        mailingReservationId: mailingReservation.id,
+      }
+    });
 
-  })
-}
+    // Обновить счетчик peopleInvited ТОЛЬКО если это первый переход
+    if (isFirstEntrance) {
+      await this.prisma.mailingReservation.update({
+        where: { id: mailingReservation.id },
+        data: {
+          peopleInvited: {
+            increment: 1
+          }
+        }
+      });
+
+      this.logger.log(`✅ FIRST entrance for user ${userId} to reservation ${mailingReservation.id}. Updated peopleInvited counter.`);
+    } else {
+      this.logger.log(`✅ REPEAT entrance for user ${userId} to reservation ${mailingReservation.id} after 4+ hours. No counter update.`);
+    }
+
+    // Получить общую статистику
+    const totalEntrances = await this.prisma.mailingEntrances.count({
+      where: {
+        mailingReservationId: mailingReservation.id
+      }
+    });
+
+    const uniqueUsers = await this.prisma.mailingEntrances.groupBy({
+      by: ['userTelegramId'],
+      where: {
+        mailingReservationId: mailingReservation.id
+      },
+      _count: {
+        userTelegramId: true
+      }
+    });
+
+    this.logger.log(`📊 Reservation ${mailingReservation.id}: entrance #${totalEntrances}, unique users: ${uniqueUsers.length}`);
+
+    return {
+      success: true,
+      entrance: entrance,
+      isFirstEntrance: isFirstEntrance,
+      canCreateNew: true,
+      statistics: {
+        totalEntrances: totalEntrances,
+        uniqueUsers: uniqueUsers.length,
+        reservationId: mailingReservation.id
+      }
+    };
+  }
 
 
   async findAll() {
@@ -423,7 +530,7 @@ export class BotSellersService {
     });
   }
 
-  async findBotSellerByLink(link: string) : Promise<BotSeller | null> {
+  async findBotSellerByLink(link: string): Promise<BotSeller | null> {
     return await this.prisma.botSeller.findFirst({
       include: {
         MailingTargetBots: {
@@ -474,7 +581,7 @@ export class BotSellersService {
 
   async regenerateApiKey(id: number) {
     const apiKey = this.generateApiKey();
-    
+
     return this.prisma.botSeller.update({
       where: { id },
       data: { apiKey },
@@ -502,7 +609,7 @@ export class BotSellersService {
       await this.validateStatisticsFile(filePath);
 
       if (
-        botSeller.statisticsFilePath && 
+        botSeller.statisticsFilePath &&
         botSeller.statisticsFilePath !== `/uploads/bot_users/${statisticsFile.filename}`
       ) {
         try {

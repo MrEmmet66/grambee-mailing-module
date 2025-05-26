@@ -7,6 +7,7 @@ export enum MailingFilters {
     CIS = 'cis'
 }
 
+
 export type CreateMailingReservationDto = {
 
     mailingId: number;
@@ -16,4 +17,5 @@ export type CreateMailingReservationDto = {
     date: Date;
 
     selectedFilters: MailingFilters[];
+    paymentType: string;
 }
