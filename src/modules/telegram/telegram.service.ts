@@ -81,11 +81,11 @@ export class TelegramService {
 
     const url = `https://api.telegram.org/bot${botToken}/setWebhook`;
     const response = await firstValueFrom(
-      this.httpService.post(url, { url: webhookUrl })
+      this.httpService.post(url, { url: `${webhookUrl}/api/v1/telegram/webhook` })
     );
 
     if (response.data.ok) {
-      console.log('Webhook set successfully');
+      console.log(`Webhook set successfully: ${response.data} for bot ${botToken}`);
     } else {
       throw new HttpException(`Failed to set webhook: ${response.data.description}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }

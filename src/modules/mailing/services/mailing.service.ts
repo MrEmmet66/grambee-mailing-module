@@ -197,12 +197,12 @@ export class MailingService {
             throw new NotFoundException('Bot seller not found');
         }
 
-                    const mailing = await this.getMailingById(dto.mailingId);
-            if (!mailing) {
-                throw new NotFoundException('Mailing not found');
-            }
+        const mailing = await this.getMailingById(dto.mailingId);
+        if (!mailing) {
+            throw new NotFoundException('Mailing not found');
+        }
 
-        let trackingLink = await this.telegramService.generateTrackingLink(mailing.isChannel, botSeller.channelId, dto.mailingId, dto.sellerId, botSeller.link, botSeller.botToken);
+        let trackingLink = await this.telegramService.generateTrackingLink(mailing.isChannel, mailing.channelId, dto.mailingId, dto.sellerId, botSeller.link, mailing.botToken || botSeller.botToken);
 
         let heldAmount = 0;
 
@@ -518,6 +518,11 @@ export class MailingService {
     }
 
     async sendMediaMessage(botToken, chatId, mailing, inlineKeyboard) {
+        // Проверяем валидность токена
+        if (!botToken || !botToken.includes(':')) {
+            throw new Error(`Invalid bot token format`);
+        }
+
         let mediaType = mailing.postMediaType || 'photo';
         let endpoint;
 
@@ -541,31 +546,104 @@ export class MailingService {
         const url = `https://api.telegram.org/bot${botToken}/${endpoint}`;
         const mediaUrl = process.cwd() + mailing.postMedia;
 
-        const formData = new FormData();
-        formData.append('chat_id', chatId);
-        formData.append('caption', mailing.postContent);
-        formData.append('parse_mode', 'HTML');
+        this.logger.log(`Attempting to send ${mediaType} from ${mediaUrl} to ${chatId}`);
 
-        if (inlineKeyboard) {
-            formData.append('reply_markup', JSON.stringify(inlineKeyboard));
+        // Проверяем существование файла
+        if (!fs.existsSync(mediaUrl)) {
+            throw new Error(`Media file not found: ${mediaUrl}`);
         }
 
-        // Add the media file
-        const mediaFile = fs.readFileSync(mediaUrl);
-        const fileName = mailing.postMedia.split('/').pop();
-        formData.append(mediaType.toLowerCase(), new Blob([mediaFile]), fileName);
+        // Проверяем размер файла
+        const stats = fs.statSync(mediaUrl);
+        this.logger.log(`File size: ${stats.size} bytes`);
 
-        const response = await fetch(url, {
-            method: 'POST',
-            body: formData,
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`Failed to send media message: ${JSON.stringify(errorData)}`);
+        if (stats.size === 0) {
+            throw new Error(`Media file is empty: ${mediaUrl}`);
         }
 
-        return await response.json();
+        // Максимальные размеры для разных типов медиа в Telegram
+        const maxSizes = {
+            photo: 10 * 1024 * 1024, // 10MB
+            video: 50 * 1024 * 1024, // 50MB
+            document: 50 * 1024 * 1024, // 50MB
+            audio: 50 * 1024 * 1024 // 50MB
+        };
+
+        if (stats.size > (maxSizes[mediaType.toLowerCase()] || maxSizes.photo)) {
+            throw new Error(`File too large for ${mediaType}: ${stats.size} bytes`);
+        }
+
+        try {
+            // Используем axios вместо fetch для лучшей обработки ошибок
+            const FormData = require('form-data');
+            const formData = new FormData();
+
+            formData.append('chat_id', chatId);
+
+            if (mailing.postContent && mailing.postContent.trim()) {
+                formData.append('caption', mailing.postContent);
+                formData.append('parse_mode', 'HTML');
+            }
+
+            if (inlineKeyboard) {
+                formData.append('reply_markup', JSON.stringify(inlineKeyboard));
+            }
+
+            // Определяем правильное поле для медиа
+            const mediaField = mediaType.toLowerCase() === 'photo' ? 'photo' :
+                mediaType.toLowerCase() === 'video' ? 'video' :
+                    mediaType.toLowerCase() === 'audio' ? 'audio' : 'document';
+
+            // Добавляем файл как stream
+            formData.append(mediaField, fs.createReadStream(mediaUrl));
+
+            const response = await this.httpService.axiosRef({
+                method: 'POST',
+                url: url,
+                data: formData,
+                headers: {
+                    ...formData.getHeaders(),
+                },
+                timeout: 60000, // 60 секунд для больших файлов
+                validateStatus: function (status) {
+                    return status < 500; // Не бросать ошибку для статусов < 500
+                }
+            });
+
+            this.logger.log(`Telegram API response status: ${response.status}`);
+            this.logger.log(`Telegram API response data:`, response.data);
+
+            if (response.status >= 400) {
+                throw new Error(`Failed to send media message: ${JSON.stringify(response.data)}`);
+            }
+
+            return response.data;
+        } catch (error) {
+            this.logger.error(`Error in sendMediaMessage:`, error);
+
+            if (error.response) {
+                this.logger.error(`Response status: ${error.response.status}`);
+                this.logger.error(`Response data:`, error.response.data);
+
+                // Специальная обработка ошибок Telegram
+                if (error.response.data && error.response.data.description) {
+                    throw new Error(`Telegram API error: ${error.response.data.description}`);
+                }
+            }
+
+            // Fallback - попробуем отправить как документ
+            if (mediaType.toLowerCase() !== 'document') {
+                this.logger.warn(`Failed to send as ${mediaType}, trying as document...`);
+                try {
+                    const documentMailing = { ...mailing, postMediaType: 'document' };
+                    return await this.sendMediaMessage(botToken, chatId, documentMailing, inlineKeyboard);
+                } catch (fallbackError) {
+                    this.logger.error(`Fallback also failed:`, fallbackError);
+                }
+            }
+
+            throw error;
+        }
     }
 
     async updateMailingStatistics(botSeller, mailing) {

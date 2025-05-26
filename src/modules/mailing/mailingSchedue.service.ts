@@ -6,9 +6,9 @@ import { MailingService } from "./services/mailing.service";
 @Injectable()
 export class MailingScheduleService {
     constructor(
-        private readonly prismaService: PrismaService, 
+        private readonly prismaService: PrismaService,
         private readonly mailingService: MailingService
-    ) {}
+    ) { }
     private readonly logger = new Logger(MailingScheduleService.name);
 
     @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
@@ -16,7 +16,7 @@ export class MailingScheduleService {
         this.logger.log("Running daily mailing task");
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        
+
         const todayMailingReservations = await this.prismaService.mailingReservation.findMany({
             where: {
                 date: today,
@@ -48,6 +48,49 @@ export class MailingScheduleService {
     }
 
     async runMailingById(mailingId: number) {
-        return await this.mailingService.runMailingById(mailingId);
+        this.logger.log(`Running mailing in schedule service by ID: ${mailingId}`);
+
+        // Сначала проверим саму рассылку
+        const mailing = await this.prismaService.mailing.findUnique({
+            where: { id: mailingId }
+        });
+
+        this.logger.log(`Mailing ${mailingId} details:`, {
+            id: mailing?.id,
+            isActive: mailing?.isActive,
+            status: mailing?.status
+        });
+
+        // Теперь все резервации без фильтров по статусу рассылки
+        const allReservations = await this.prismaService.mailingReservation.findMany({
+            where: {
+                mailingId: mailingId,
+                isProcessed: false
+            },
+            include: {
+                mailing: true,
+                botSeller: true,
+            }
+        });
+
+        this.logger.log(`All unprocessed reservations for mailing ${mailingId}:`,
+            allReservations.map(r => ({
+                id: r.id,
+                isProcessed: r.isProcessed,
+                mailingIsActive: r.mailing?.isActive,
+                mailingStatus: r.mailing?.status
+            }))
+        );
+
+        // Фильтруем только активные и одобренные
+        const validReservations = allReservations.filter(r =>
+            r.mailing?.isActive && r.mailing?.status === 'APPROVED'
+        );
+
+        this.logger.log(`Valid reservations found: ${validReservations.length}`);
+
+        for (const reservation of validReservations) {
+            await this.mailingService.processMailing(reservation);
+        }
     }
 }

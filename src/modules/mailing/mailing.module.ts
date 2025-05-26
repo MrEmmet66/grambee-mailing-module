@@ -14,10 +14,13 @@ import { TelegramModule } from '../telegram/telegram.module';
 import { HttpModule } from '@nestjs/axios';
 import { ConfigModule } from '@nestjs/config';
 import { forwardRef } from '@nestjs/common';
+import { MailingPaymentService } from './services/payment.service';
+import { BalanceModule } from '../balance/balance.module';
 
 @Module({
     imports: [
         forwardRef(() => TelegramModule),
+        BalanceModule,
         ConfigModule,
         HttpModule,
         PrismaModule,
@@ -33,7 +36,7 @@ import { forwardRef } from '@nestjs/common';
         }),
     ],
     controllers: [MailingController],
-    providers: [MailingService, MailingScheduleService],
-    exports: [MailingService, MailingScheduleService],
+    providers: [MailingService, MailingScheduleService, MailingPaymentService],
+    exports: [MailingService, MailingScheduleService, MailingPaymentService],
 })
 export class MailingModule {}

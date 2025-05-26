@@ -21,6 +21,9 @@ services:
       sh -c "npx prisma migrate deploy && npm run start"
     volumes:
       - ./uploads:/app/uploads
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
 
   postgres:
     container_name: postgres

@@ -10,9 +10,13 @@ import { ModuleRef } from '@nestjs/core';
 import { MailingService } from '../mailing/services/mailing.service';
 import { MailingModule } from '../mailing/mailing.module';
 import { ApplicationsService } from './applications.service';
+import { MailingPaymentService } from '../mailing/services/payment.service';
+import { StatsService } from '../mailing/stats/stats.service';
+import { PrismaModule } from 'prisma/prisma.module';
 
 @Module({
   imports: [
+    PrismaModule,
     HttpModule,
     ConfigModule,
     forwardRef(() => BotSellersModule),
@@ -30,7 +34,7 @@ import { ApplicationsService } from './applications.service';
     })
   ],
   controllers: [TelegramController],
-  providers: [TelegramService, ApplicationsService],
+  providers: [TelegramService, ApplicationsService, StatsService],
   exports: [TelegramService, ApplicationsService],
 })
 export class TelegramModule implements OnModuleInit {

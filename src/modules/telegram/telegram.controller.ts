@@ -10,6 +10,7 @@ export class TelegramController {
 
     @Post('webhook')
     async handleWebhook(@Body() update: any) {
+        this.logger.log(`Received update: ${JSON.stringify(update)}`, 'TelegramController');
         if(update.chat_join_request) {
             this.logger.log(`Received chat join request from ${update.chat_join_request.from.id}`, 'TelegramController');
             const chatId = update.chat_join_request.chat.id;

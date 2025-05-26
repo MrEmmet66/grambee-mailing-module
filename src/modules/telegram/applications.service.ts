@@ -4,7 +4,10 @@ import { InjectBot } from 'nestjs-telegraf';
 import { Context, Telegraf } from 'telegraf';
 import { Mailing, BotSeller, MailingReservation } from '@prisma/client';
 import { MailingService } from '../mailing/services/mailing.service';
+import { MailingPaymentService } from '../mailing/services/payment.service';
+import { StatsService } from '../mailing/stats/stats.service';
 import { MailingNotifyProps } from './telegram.types';
+import { TelegramService } from './telegram.service';
 
 @Injectable()
 export class ApplicationsService {
@@ -14,9 +17,12 @@ export class ApplicationsService {
         private configService: ConfigService,
         @Inject(forwardRef(() => MailingService))
         private readonly mailingService: MailingService,
+        private readonly mailingPaymentService: MailingPaymentService,
+        private readonly statsService: StatsService,
+        private readonly telegramService: TelegramService,
         @InjectBot() private readonly bot: Telegraf<Context>
     ) { }
-t
+
     // This method will be called after all providers are resolved
     setBotSellersService(botSellersService: any) {
         this.botSellersService = botSellersService;
@@ -286,6 +292,17 @@ t
         // Обработчик кнопки "Назад"
         this.bot.action(/back_to_application:(\d+)/, (ctx) => this.handleBackToApplication(ctx));
 
+        // NEW: Add handlers for mailing execution notification buttons
+        this.bot.action(/view_post:(\d+)/, (ctx) => this.handleViewPost(ctx));
+        this.bot.action(/approve_mailing_process:(\d+)/, (ctx) => this.handleApproveMailingProcess(ctx));
+        this.bot.action(/freeze_mailing_process:(\d+)/, (ctx) => this.handleFreezeMailingProcess(ctx));
+        this.bot.action(/stats:(\d+)/, (ctx) => this.handleGetStatistics(ctx));
+
+        // NEW: Confirmation handlers
+        this.bot.action(/confirm_approve:(\d+)/, (ctx) => this.handleConfirmApprove(ctx));
+        this.bot.action(/confirm_freeze:(\d+)/, (ctx) => this.handleConfirmFreeze(ctx));
+        this.bot.action(/cancel_action:(\d+)/, (ctx) => this.handleCancelAction(ctx));
+
         console.log('Application callback handlers setup completed');
     }
 
@@ -301,6 +318,7 @@ t
                 if (!mailing) {
                     throw new HttpException(`Mailing with ID ${mailingId} not found`, HttpStatus.NOT_FOUND);
                 }
+                this.telegramService.setupWebhook(mailing.botToken || '');
                 console.log(`Mailing ${mailingId} status updated to APPROVED`);
             } catch (error) {
                 console.error(`Error updating mailing status in database: ${error.message}`);
@@ -733,5 +751,272 @@ t
         // Если дошли сюда, значит не смогли извлечь ID
         console.error('Could not extract ID from callback data:', callbackData);
         throw new Error(`Could not extract bot seller ID from callback query data: ${callbackData}`);
+    }
+
+    // NEW: Handlers for mailing execution notification
+    private async handleViewPost(ctx: Context) {
+        try {
+            const reservationId = this.extractReservationId(ctx);
+            console.log(`Viewing post for reservation: ${reservationId}`);
+
+            const reservation = await this.statsService.getMailingReservationDetails(Number(reservationId));
+            if (!reservation) {
+                await ctx.answerCbQuery('Резервация не найдена');
+                return;
+            }
+
+            const mailing = reservation.mailing;
+            let postMessage = `📝 **Пост рассылки #${mailing.id}**\n\n`;
+            postMessage += `**Контент:**\n${mailing.postContent}\n\n`;
+            
+            if (mailing.postButtons) {
+                postMessage += `**Кнопки:**\n${mailing.postButtons}\n\n`;
+            }
+
+            if (mailing.postMedia) {
+                postMessage += `**Медиа:** ${mailing.postMedia}\n`;
+                postMessage += `**Тип медиа:** ${mailing.postMediaType || 'Не указан'}`;
+            }
+
+            // Send to admin privately
+            const adminId = ctx.from?.id;
+            if (adminId) {
+                await this.bot.telegram.sendMessage(adminId, postMessage, { parse_mode: 'Markdown' });
+                await ctx.answerCbQuery('Пост отправлен в ЛС');
+            }
+        } catch (error) {
+            console.error('Error viewing post:', error);
+            await ctx.answerCbQuery('Ошибка при просмотре поста');
+        }
+    }
+
+    private async handleApproveMailingProcess(ctx: Context) {
+        try {
+            const reservationId = this.extractReservationId(ctx);
+            console.log(`Requesting approval confirmation for reservation: ${reservationId}`);
+
+            const confirmationKeyboard = {
+                inline_keyboard: [
+                    [
+                        { text: "✅ Подтвердить одобрение", callback_data: `confirm_approve:${reservationId}` },
+                        { text: "❌ Отмена", callback_data: `cancel_action:${reservationId}` }
+                    ]
+                ]
+            };
+
+            await ctx.answerCbQuery('Подтвердите одобрение');
+            await ctx.editMessageReplyMarkup(confirmationKeyboard as any);
+
+        } catch (error) {
+            console.error('Error requesting approval confirmation:', error);
+            await ctx.answerCbQuery('Ошибка при запросе подтверждения');
+        }
+    }
+
+    private async handleFreezeMailingProcess(ctx: Context) {
+        try {
+            const reservationId = this.extractReservationId(ctx);
+            console.log(`Requesting freeze confirmation for reservation: ${reservationId}`);
+
+            const confirmationKeyboard = {
+                inline_keyboard: [
+                    [
+                        { text: "❄️ Подтвердить заморозку", callback_data: `confirm_freeze:${reservationId}` },
+                        { text: "❌ Отмена", callback_data: `cancel_action:${reservationId}` }
+                    ]
+                ]
+            };
+
+            await ctx.answerCbQuery('Подтвердите заморозку');
+            await ctx.editMessageReplyMarkup(confirmationKeyboard as any);
+
+        } catch (error) {
+            console.error('Error requesting freeze confirmation:', error);
+            await ctx.answerCbQuery('Ошибка при запросе подтверждения');
+        }
+    }
+
+    private async handleGetStatistics(ctx: Context) {
+        try {
+            const reservationId = this.extractReservationId(ctx);
+            console.log(`Getting statistics for reservation: ${reservationId}`);
+
+            const reservation = await this.statsService.getMailingReservationDetails(Number(reservationId));
+            if (!reservation) {
+                await ctx.answerCbQuery('Резервация не найдена');
+                return;
+            }
+
+            let statsMessage: string;
+
+            if (reservation.botSeller.isChannel) {
+                const channelStats = await this.statsService.getChannelStatistics(Number(reservationId));
+                statsMessage = await this.statsService.formatChannelStatistics(channelStats);
+            } else {
+                const botStats = await this.statsService.getBotStatistics(Number(reservationId));
+                statsMessage = await this.statsService.formatBotStatistics(botStats);
+            }
+
+            // Send statistics to admin privately
+            const adminId = ctx.from?.id;
+            if (adminId) {
+                await this.bot.telegram.sendMessage(adminId, statsMessage, { parse_mode: 'HTML' });
+                await ctx.answerCbQuery('Статистика отправлена в ЛС');
+            }
+
+        } catch (error) {
+            console.error('Error getting statistics:', error);
+            await ctx.answerCbQuery('Ошибка при получении статистики');
+        }
+    }
+
+    private async handleConfirmApprove(ctx: Context) {
+        try {
+            const reservationId = this.extractReservationId(ctx);
+            console.log(`Confirming approval for reservation: ${reservationId}`);
+
+            const result = await this.mailingPaymentService.approveMailingPayment(Number(reservationId));
+
+            const successMessage = `
+✅ **РАССЫЛКА ОДОБРЕНА И ОПЛАЧЕНА**
+
+🆔 **ID резервации:** #${reservationId}
+💰 **Итого к оплате:** ${result.totalPayment}р
+👤 **Продавцу:** ${result.sellerAmount}р  
+🏢 **Комиссия сервиса:** ${result.serviceCommission}р
+📊 **Переходов:** ${result.entranceCount}
+🔒 **Было в холде:** ${result.originalHold}р
+${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additionalCharge}р` : ''}
+
+🕒 **Время обработки:** ${new Date().toLocaleString('ru-RU')}
+            `;
+
+            await ctx.editMessageText(successMessage, {
+                reply_markup: undefined,
+                parse_mode: 'Markdown'
+            });
+
+            await ctx.answerCbQuery('✅ Рассылка успешно одобрена и оплачена');
+
+        } catch (error) {
+            console.error('Error confirming approval:', error);
+            await ctx.answerCbQuery(`Ошибка при одобрении: ${error.message}`);
+            
+            // Restore original keyboard on error
+            await this.restoreOriginalKeyboard(ctx, this.extractReservationId(ctx));
+        }
+    }
+
+    private async handleConfirmFreeze(ctx: Context) {
+        try {
+            const reservationId = this.extractReservationId(ctx);
+            console.log(`Confirming freeze for reservation: ${reservationId}`);
+
+            await this.mailingPaymentService.freezeMailingPayment(Number(reservationId), 'Заморожена администратором для подробного рассмотрения');
+
+            const reservation = await this.statsService.getMailingReservationDetails(Number(reservationId));
+
+            // Notify customer and seller about freeze
+            if (reservation) {
+                const customerMessage = `
+❄️ **ВАША РЕКЛАМА ЗАМОРОЖЕНА**
+
+Ваша реклама в рассылке #${reservation.mailingId} заморожена и находится на подробном рассмотрении у администрации.
+
+Деньги не списаны и остаются в холде до решения администрации.
+                `;
+
+                const sellerMessage = `
+❄️ **РЕКЛАМА ЗАМОРОЖЕНА**
+
+Реклама в вашем боте/канале заморожена и находится на подробном рассмотрении у администрации.
+
+Оплата приостановлена до решения администрации.
+                `;
+
+                try {
+                    await this.bot.telegram.sendMessage(reservation.mailing.user.telegramId, customerMessage, { parse_mode: 'Markdown' });
+                    await this.bot.telegram.sendMessage(reservation.botSeller.user.telegramId, sellerMessage, { parse_mode: 'Markdown' });
+                } catch (notificationError) {
+                    console.error('Error sending freeze notifications:', notificationError);
+                }
+            }
+
+            const freezeMessage = `
+❄️ **РАССЫЛКА ЗАМОРОЖЕНА**
+
+🆔 **ID резервации:** #${reservationId}
+🕒 **Время заморозки:** ${new Date().toLocaleString('ru-RU')}
+
+Деньги не списаны. Уведомления отправлены заказчику и исполнителю.
+Реклама находится на подробном рассмотрении у администрации.
+            `;
+
+            await ctx.editMessageText(freezeMessage, {
+                reply_markup: undefined,
+                parse_mode: 'Markdown'
+            });
+
+            await ctx.answerCbQuery('❄️ Рассылка заморожена, уведомления отправлены');
+
+        } catch (error) {
+            console.error('Error confirming freeze:', error);
+            await ctx.answerCbQuery(`Ошибка при заморозке: ${error.message}`);
+            
+            // Restore original keyboard on error
+            await this.restoreOriginalKeyboard(ctx, this.extractReservationId(ctx));
+        }
+    }
+
+    private async handleCancelAction(ctx: Context) {
+        try {
+            const reservationId = this.extractReservationId(ctx);
+            console.log(`Cancelling action for reservation: ${reservationId}`);
+
+            await this.restoreOriginalKeyboard(ctx, reservationId);
+            await ctx.answerCbQuery('Действие отменено');
+
+        } catch (error) {
+            console.error('Error cancelling action:', error);
+            await ctx.answerCbQuery('Ошибка при отмене действия');
+        }
+    }
+
+    private async restoreOriginalKeyboard(ctx: Context, reservationId: string) {
+        const originalKeyboard = {
+            inline_keyboard: [
+                [
+                    { text: "👀 Посмотреть пост", callback_data: `view_post:${reservationId}` },
+                    { text: "✅ Одобрить", callback_data: `approve_mailing_process:${reservationId}` }
+                ],
+                [
+                    { text: "❄️ Заморозить", callback_data: `freeze_mailing_process:${reservationId}` },
+                    { text: "📊 Статистика", callback_data: `stats:${reservationId}` }
+                ]
+            ]
+        };
+
+        await ctx.editMessageReplyMarkup(originalKeyboard as any);
+    }
+
+    private extractReservationId(ctx: Context): string {
+        if (!ctx.callbackQuery) {
+            throw new Error('Callback query is undefined');
+        }
+
+        const callbackData = (ctx.callbackQuery as any).data;
+        if (!callbackData) {
+            throw new Error('Callback query data is undefined');
+        }
+
+        // Extract ID from callback data
+        const match = callbackData.match(/:(\d+)$/);
+        if (match) {
+            const id = match[1];
+            console.log(`Extracted reservation ID: ${id}`);
+            return id;
+        }
+
+        throw new Error(`Could not extract reservation ID from callback query data: ${callbackData}`);
     }
 }

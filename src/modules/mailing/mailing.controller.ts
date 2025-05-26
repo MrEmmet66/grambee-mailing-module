@@ -11,6 +11,7 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { MailingScheduleService } from './mailingSchedue.service';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiParam } from '@nestjs/swagger';
+import { log } from 'console';
 
 @ApiTags('mailings')
 @Controller('mailings')
@@ -130,6 +131,8 @@ export class MailingController {
     })
     @ApiResponse({ status: 404, description: 'Рассылка не найдена или неактивна.' })
     async runTestMailing(@Param('id') id: string) {
+        console.log(`Running test mailing for ID: ${id}`);
+        
         return await this.mailingScheduleService.runMailingById(parseInt(id, 10));
     }
 
