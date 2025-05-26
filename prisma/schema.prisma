@@ -135,6 +135,19 @@ model MailingTargetBots {
 
   botSeller BotSeller @relation(fields: [botSellerId], references: [id])
   mailing Mailing @relation(fields: [mailingId], references: [id])
+
+  MailingEntrances MailingEntrances[]
+}
+
+model MailingEntrances {
+  id Int @id @default(autoincrement())
+  mailingTargetBotId Int
+  userTelegramId Int
+  date DateTime @default(now())
+  
+  
+  mailingTargetBot MailingTargetBots @relation(fields: [mailingTargetBotId], references: [id])
+
 }
 
 

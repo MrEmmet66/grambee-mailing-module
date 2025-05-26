@@ -12,6 +12,8 @@ import { ConfigService } from '@nestjs/config';
 import * as fs from "fs";
 import * as readline from "readline";
 import { setTimeout } from "timers/promises";
+import { Application } from 'express';
+import { ApplicationsService } from '../telegram/applications.service';
 
 @Injectable()
 export class MailingService {
@@ -19,8 +21,8 @@ export class MailingService {
 
     constructor(
         private readonly prismaService: PrismaService,
-        @Inject(forwardRef(() => TelegramService)) 
-        private telegramService: TelegramService,
+        @Inject(forwardRef(() => ApplicationsService)) 
+        private telegramService: ApplicationsService,
         private httpService: HttpService,
         private configService: ConfigService,
     ) {}
@@ -37,6 +39,20 @@ export class MailingService {
         });
     }
 
+    async getMailingById(mailingId: number) {
+        const mailing = await this.prismaService.mailing.findUnique({
+            where: {
+                id: mailingId
+            }
+        });
+
+        if (!mailing) {
+            throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
+        }
+
+        return mailing;
+    }
+
     async createMailing(dto: CreateMailingFormData) {
         this.logger.log(`Creating mailing with data: ${JSON.stringify({
             userId: dto.userId,
@@ -48,6 +64,8 @@ export class MailingService {
             contentLength: dto.content?.length || 0,
             buttonText: dto.buttonContent || 'No button'
         })}`);
+
+
         
         // If there's a media file, use its path
         const mediaPath = dto.media ? `/uploads/${dto.media.filename}` : null;
@@ -160,7 +178,7 @@ export class MailingService {
 
         const existingReservation = await this.prismaService.mailingReservation.findFirst({
             where: {
-                date: dto.date
+                date: dto.date,
             }
         });
 
@@ -193,26 +211,31 @@ export class MailingService {
                 where: { id: dto.sellerId }
             });
 
+            const mailing = await this.getMailingById(dto.mailingId);
+            if (!mailing) {
+                throw new NotFoundException('Mailing not found');
+            }
+
             if (!botSeller) {
                 throw new NotFoundException('Bot seller not found');
             }
 
             let trackingLink = '';
 
-            if (botSeller.isChannel) {
+            if (mailing.isChannel) {
                 // Generate invite link for channel
                 try {
                     const response = await fetch(
-                        `https://api.telegram.org/bot${botSeller.botToken}/createChatInviteLink`,
+                        `https://api.telegram.org/bot${mailing.botToken}/createChatInviteLink`,
                         {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json'
                             },
                             body: JSON.stringify({
-                                chat_id: botSeller.channelId,
+                                chat_id: mailing.channelId,
                                 name: `Mailing_${dto.mailingId}`,
-                                creates_join_request: false
+                                creates_join_request: true
                             })
                         }
                     );

@@ -9,6 +9,7 @@ import { BotSellersService } from '../bot_sellers/bot-sellers.service';
 import { ModuleRef } from '@nestjs/core';
 import { MailingService } from '../mailing/mailing.service';
 import { MailingModule } from '../mailing/mailing.module';
+import { ApplicationsService } from './applications.service';
 
 @Module({
   imports: [
@@ -29,13 +30,13 @@ import { MailingModule } from '../mailing/mailing.module';
     })
   ],
   controllers: [TelegramController],
-  providers: [TelegramService],
-  exports: [TelegramService],
+  providers: [TelegramService, ApplicationsService],
+  exports: [TelegramService, ApplicationsService],
 })
 export class TelegramModule implements OnModuleInit {
   constructor(
     private moduleRef: ModuleRef,
-    private telegramService: TelegramService
+    private telegramService: ApplicationsService
   ) {}
 
   async onModuleInit() {

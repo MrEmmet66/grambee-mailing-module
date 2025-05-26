@@ -77,7 +77,10 @@ export class MailingController {
             content: dto.content,
             mediaType: dto.mediaType || 'photo', // Default to photo if not specified
             buttonContent: dto.buttonContent,
-            media: file
+            media: file,
+            channelId: dto.channelId, // Optional field
+            botLink: dto.botLink, // Optional field
+            isChannel: dto.isChannel || false // Optional field
         };
         
         // Call the service to create the mailing
@@ -193,7 +196,6 @@ export class MailingController {
                 type: 'object',
                 properties: {
                     id: { type: 'number', example: 1 },
-                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
                     userId: { type: 'number', example: 1 },
                     content: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
                     mediaType: { type: 'string', example: 'photo' },

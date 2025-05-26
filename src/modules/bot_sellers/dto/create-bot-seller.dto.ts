@@ -47,19 +47,6 @@ export class CreateBotSellerDto {
   @IsNotEmpty()
   link: string;
 
-  @ApiProperty({ description: 'Активен ли бот', default: false, required: false })
-  @IsBoolean()
-  @IsOptional()
-  isActive?: boolean;
-
-  @ApiProperty({ 
-    description: 'Категория бота',
-    enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'],
-    required: false
-  })
-  @IsEnum(BotCategories)
-  @IsOptional()
-  category?: BotCategories;
 
   @ApiProperty({ description: 'Является ли бот каналом', default: false, required: false })
   @IsBoolean()

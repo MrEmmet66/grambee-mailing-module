@@ -8,6 +8,8 @@ import * as path from 'path';
 import * as readline from 'readline';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
+import { BotSeller, MailingTargetBots } from '@prisma/client';
+import { ApplicationsService } from '../telegram/applications.service';
 
 @Injectable()
 export class BotSellersService {
@@ -15,8 +17,8 @@ export class BotSellersService {
 
   constructor(
     private prisma: PrismaService,
-    @Inject(forwardRef(() => TelegramService))
-    private telegramService: TelegramService,
+    @Inject(forwardRef(() => ApplicationsService))
+    private telegramService: ApplicationsService,
     private configService: ConfigService
   ) {
     const botUsersDir = path.join(process.cwd(), 'uploads', 'bot_users');
@@ -326,7 +328,6 @@ export class BotSellersService {
       isChannel: isChannel, // Make sure to use the processed boolean value
       // Only set channelId if isChannel is true and channelId is provided
       channelId: isChannel ? createBotSellerDto.channelId : null,
-      category: createBotSellerDto.category || 'OTHER'
     };
 
     // Remove telegramId from data sent to Prisma as it's not in the BotSeller model
@@ -348,6 +349,35 @@ export class BotSellersService {
 
     return botSeller;
   }
+
+  async handleMailingEntrance(link: string, userId: number) {
+    const botSeller = await this.findBotSellerByLink(link);
+
+    const userMailingEntrance = await this.prisma.mailingEntrances.findFirst({
+      where: {
+        userTelegramId: userId,
+        mailingTargetBotId: botSeller?.id
+      }
+    });
+
+    if (userMailingEntrance) {
+      this.logger.log(`User ${userId} already has an entrance for bot ${botSeller?.id}`);
+      return userMailingEntrance;
+    }
+
+    if (!botSeller) {
+      return null;
+    }
+
+    await this.prisma.mailingEntrances.create({
+      data: {
+        userTelegramId: userId,
+        mailingTargetBotId: botSeller?.id,
+      },
+
+  })
+}
+
 
   async findAll() {
     return this.prisma.botSeller.findMany({
@@ -390,6 +420,18 @@ export class BotSellersService {
       include: {
         user: true,
       },
+    });
+  }
+
+  async findBotSellerByLink(link: string) : Promise<BotSeller | null> {
+    return await this.prisma.botSeller.findFirst({
+      include: {
+        MailingTargetBots: {
+          where: {
+            link: link,
+          }
+        }
+      }
     });
   }
 
