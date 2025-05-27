@@ -54,11 +54,6 @@ export class MailingController {
         ) file: Express.Multer.File,
         @Req() req: Request
     ) {
-
-        // Validate required fields
-        if (!dto.botToken) {
-            throw new HttpException('Bot token is required', HttpStatus.BAD_REQUEST);
-        }
         
         if (!dto.userId) {
             throw new HttpException('User ID is required', HttpStatus.BAD_REQUEST);

@@ -175,6 +175,20 @@ export class MailingService {
         })
     }
 
+    async getMailingReservationByLink(link: string) {
+        return await this.prismaService.mailingReservation.findFirst({
+            where: {
+                trackingLink: link,
+                isProcessed: true,
+                adminApprovalStatus: { not: 'FROZEN' }
+            },
+            include: {
+                mailing: true,
+                botSeller: true
+            }
+        });
+    }
+
     async reserveMailingDay(dto: CreateMailingReservationDto) {
         const jsonSelectedFilters = JSON.stringify(dto.selectedFilters);
 
