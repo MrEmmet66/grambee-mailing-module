@@ -16,7 +16,7 @@ import { BalanceModule } from './modules/balance/balance.module';
     ScheduleModule.forRoot(),
     ServeStaticModule.forRoot({
       rootPath: `${process.cwd()}/uploads`,
-      serveRoot: '/uploads',
+      serveRoot: '/api/v1/uploads',
     }),
     ConfigModule.forRoot({
       isGlobal: true

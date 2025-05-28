@@ -20,6 +20,19 @@ export class TelegramService {
       .post(url, { chat_id: chatId, user_id: userId })
   }
 
+  async getChatInfo(chatId: string, botToken: string) {
+    const url = `https://api.telegram.org/bot${botToken}/getChat`;
+    const response = await firstValueFrom(
+      this.httpService.post(url, { chat_id: chatId })
+    );
+    if (response.data.ok) {
+      return response.data;
+    } else {
+      throw new HttpException(`Failed to get chat info: ${response.data.description}`, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+
   async createChatInviteLink(chatId: string, botToken: string) {
     const url = `https://api.telegram.org/bot${botToken}/createChatInviteLink`;
     const response = await firstValueFrom(

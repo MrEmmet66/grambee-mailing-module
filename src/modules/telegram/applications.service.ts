@@ -318,7 +318,9 @@ export class ApplicationsService {
                 if (!mailing) {
                     throw new HttpException(`Mailing with ID ${mailingId} not found`, HttpStatus.NOT_FOUND);
                 }
-                this.telegramService.setupWebhook(mailing.botToken || '');
+                if(mailing.botToken !== null) {
+                    this.telegramService.setupWebhook(mailing.botToken || '');
+                }
                 console.log(`Mailing ${mailingId} status updated to APPROVED`);
             } catch (error) {
                 console.error(`Error updating mailing status in database: ${error.message}`);

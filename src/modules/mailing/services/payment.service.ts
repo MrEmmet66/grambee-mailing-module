@@ -49,7 +49,7 @@ export class MailingPaymentService {
             serviceCommission = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
             totalPayment = sellerAmount + serviceCommission;
 
-        } else if (targetBot?.paymentType === 'perSubscriber') {
+        } else if (targetBot?.paymentType === 'subscriber') {
             // Оплата за подписчика - считаем по факту переходов
             const pricePerSubscriber = reservation.botSeller.subscriberPrice || 0;
             const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);

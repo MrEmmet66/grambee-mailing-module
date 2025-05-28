@@ -27,6 +27,8 @@ async function bootstrap() {
     })
   );
 
+  
+
   app.setGlobalPrefix('api/v1');
 
   // Настройка Swagger

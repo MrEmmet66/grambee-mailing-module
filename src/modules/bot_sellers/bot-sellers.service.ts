@@ -34,16 +34,16 @@ export class BotSellersService {
   async findByMailingId(mailingId: number) {
     return await this.prisma.botSeller.findMany({
       where: {
-        mailingReservations: {
+        MailingTargetBots: {
           some: {
-            id: mailingId,
+            mailingId: mailingId,
           },
         },
       },
       include: {
         MailingTargetBots: {
-          include: {
-            mailing: true,
+          where: {
+            mailingId: mailingId,
           }
         }
       },

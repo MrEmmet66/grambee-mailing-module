@@ -2,15 +2,16 @@
 https://docs.nestjs.com/controllers#controllers
 */
 
-import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query } from '@nestjs/common';
+import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete } from '@nestjs/common';
 import { MailingService } from './services/mailing.service';
-import { CreateMailingDto, CreateMailingFormData } from './dto/createMailing.dto';
+import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateMailingContentDto } from './dto/createMailing.dto';
 import { CreateMailingReservationDto } from './dto/createMailingReservation.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { MailingScheduleService } from './mailingSchedue.service';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiParam } from '@nestjs/swagger';
+import { MailingStatus } from '@prisma/client';
 import { log } from 'console';
 
 @ApiTags('mailings')
@@ -90,6 +91,55 @@ export class MailingController {
         return await this.mailingService.reserveMailingDay(dto);
     }
 
+    @Patch('/post/:id')
+    @ApiOperation({ summary: 'Обновить контент рассылки' })
+    @ApiConsumes('multipart/form-data')
+    @ApiParam({ name: 'id', description: 'ID рассылки' })
+    @ApiBody({
+        description: 'Данные для обновления контента рассылки с возможностью загрузки медиа-файла',
+        type: UpdateMailingContentDto
+    })
+    @ApiResponse({ status: 200, description: 'Контент рассылки успешно обновлен.' })
+    @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
+    @UseInterceptors(FileInterceptor('media', {
+        storage: diskStorage({
+            destination: './uploads',
+            filename: (req, file, cb) => {
+                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+                const ext = extname(file.originalname);
+                cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+            },
+        }),
+    }))
+    async updateMailingContent(
+        @Param('id') id: string,
+        @Body() updateData: UpdateMailingContentFormData,
+        @UploadedFile(
+            new ParseFilePipeBuilder()
+                .addMaxSizeValidator({
+                    maxSize: 10 * 1024 * 1024, // 10MB
+                })
+                .build({
+                    errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+                    fileIsRequired: false, // File is optional for updates
+                }),
+        ) file: Express.Multer.File
+    ) {
+        const mailingId = parseInt(id, 10);
+        
+        if (!updateData.content) {
+            throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
+        }
+
+        // Add the uploaded file to the update data
+        const updateDataWithFile: UpdateMailingContentFormData = {
+            ...updateData,
+            media: file
+        };
+
+        return await this.mailingService.updateMailingContent(mailingId, updateDataWithFile);
+    }
+
     @Patch(':id/toggle')
     @ApiOperation({ summary: 'Включить/выключить рассылку' })
     @ApiParam({ name: 'id', description: 'ID рассылки' })
@@ -97,6 +147,20 @@ export class MailingController {
     @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
     async toggleMailingStatus(@Param('id') id: string) {
         return await this.mailingService.toggleMailingStatus(parseInt(id, 10));
+    }
+
+    @Delete('reservations/:id')
+    @ApiOperation({ summary: 'Удалить резервирование рассылки по ID' })
+    @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
+    @ApiResponse({ status: 200, description: 'Резервирование рассылки успешно удалено.' })
+    @ApiResponse({ status: 404, description: 'Резервирование рассылки не найдено.' })
+    async deleteMailingReservation(@Param('id') id: string) {
+        const reservationId = parseInt(id, 10);
+        if (isNaN(reservationId)) {
+            throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
+        }
+
+        return await this.mailingService.removeMailingReservation(reservationId);
     }
 
     @Get('run-test/:id')
@@ -131,29 +195,37 @@ export class MailingController {
         return await this.mailingScheduleService.runMailingById(parseInt(id, 10));
     }
 
-    @Patch(':id/status')
-    @ApiOperation({ summary: 'Обновить статус рассылки (approve/reject/wait)' })
+    @Delete(':id')
+    @ApiOperation({ summary: 'Удалить рассылку по ID' })
     @ApiParam({ name: 'id', description: 'ID рассылки' })
-    @ApiBody({
-        schema: {
-            type: 'object',
-            properties: {
-                status: { 
-                    type: 'string', 
-                    enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING'],
-                    example: 'APPROVED'
-                }
-            }
-        }
-    })
-    @ApiResponse({ status: 200, description: 'Статус рассылки обновлен.' })
+    @ApiResponse({ status: 200, description: 'Рассылка успешно удалена.' })
     @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
-    async updateMailingStatus(
-        @Param('id') id: string,
-        @Body() body: { status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WAITING' }
-    ) {
-        return await this.mailingService.updateMailingStatus(parseInt(id, 10), body.status);
+    async deleteMailing(@Param('id') id: string) {
+        const mailingId = parseInt(id, 10);
+        if (isNaN(mailingId)) {
+            throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
+        }
+        
+        return await this.mailingService.deleteMailing(mailingId);
     }
+
+    @Get('reservations/:sellerId')
+@ApiOperation({ summary: 'Получить календарь доступности для резервирования рассылок' })
+@ApiParam({ name: 'sellerId', description: 'ID продавца бота' })
+@ApiResponse({ 
+    status: 200, 
+    description: 'Календарь доступности на 30 дней.',
+})
+async getMailingCalendar(@Param('sellerId') sellerId: string) {
+    const sellerIdNum = parseInt(sellerId, 10);
+    if (isNaN(sellerIdNum)) {
+        throw new HttpException('Invalid seller ID', HttpStatus.BAD_REQUEST);
+    }
+    
+    return await this.mailingService.getMailingReservationsBySellerId(sellerIdNum);
+}
+
+
 
     @Get('/user/:userId')
     @ApiOperation({ summary: 'Получить все рассылки пользователя' })
@@ -167,13 +239,17 @@ export class MailingController {
                 type: 'object',
                 properties: {
                     id: { type: 'number', example: 1 },
-                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ' },
                     userId: { type: 'number', example: 1 },
-                    content: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
-                    mediaType: { type: 'string', example: 'photo' },
-                    buttons: { type: 'string', example: '[{"text":"Перейти","url":"https://example.com"}]' },
-                    createdAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' },
-                    updatedAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' }
+                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ', nullable: true },
+                    channelId: { type: 'string', example: '-1001234567890', nullable: true },
+                    isChannel: { type: 'boolean', example: false },
+                    botLink: { type: 'string', example: 'https://t.me/example_bot', nullable: true },
+                    status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'], example: 'PENDING' },
+                    isActive: { type: 'boolean', example: false },
+                    postContent: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
+                    postButtons: { type: 'object', example: '[{"text":"Перейти","url":"https://example.com"}]' },
+                    postMedia: { type: 'string', example: 'uploads/media-123456789.jpg', nullable: true },
+                    postMediaType: { type: 'string', example: 'photo', nullable: true }
                 }
             }
         }
@@ -195,11 +271,16 @@ export class MailingController {
                 properties: {
                     id: { type: 'number', example: 1 },
                     userId: { type: 'number', example: 1 },
-                    content: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
-                    mediaType: { type: 'string', example: 'photo' },
-                    buttons: { type: 'string', example: '[{"text":"Перейти","url":"https://example.com"}]' },
-                    createdAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' },
-                    updatedAt: { type: 'string', format: 'date-time', example: '2023-10-01T12:00:00Z' }
+                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ', nullable: true },
+                    channelId: { type: 'string', example: '-1001234567890', nullable: true },
+                    isChannel: { type: 'boolean', example: false },
+                    botLink: { type: 'string', example: 'https://t.me/example_bot', nullable: true },
+                    status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'], example: 'PENDING' },
+                    isActive: { type: 'boolean', example: false },
+                    postContent: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
+                    postButtons: { type: 'object', example: '[{"text":"Перейти","url":"https://example.com"}]' },
+                    postMedia: { type: 'string', example: 'uploads/media-123456789.jpg', nullable: true },
+                    postMediaType: { type: 'string', example: 'photo', nullable: true }
                 }
             }
         }

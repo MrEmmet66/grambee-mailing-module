@@ -3,9 +3,10 @@ import { ApiProperty } from '@nestjs/swagger';
 export class CreateMailingDto {
     @ApiProperty({ 
         description: 'Токен бота Telegram',
-        example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ' 
+        example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        required: false
     })
-    botToken: string;
+    botToken?: string;
 
     @ApiProperty({ 
         description: 'ID пользователя, создающего рассылку',
@@ -26,6 +27,13 @@ export class CreateMailingDto {
         required: false
     })
     botLink?: string;
+
+    @ApiProperty({
+        description: 'Флаг, указывающий на тип рассылки (канал или бот)',
+        example: false,
+        required: false
+    })
+    isChannel?: boolean;
 
     @ApiProperty({ 
         description: 'Содержимое рассылки (текст)', 
@@ -59,7 +67,7 @@ export class CreateMailingDto {
 
 // This interface represents the form data with file
 export interface CreateMailingFormData {
-    botToken: string;
+    botToken?: string;
     userId: number;
     channelId?: string;
     botLink?: string;
@@ -67,5 +75,43 @@ export interface CreateMailingFormData {
     content: string;
     mediaType?: string;
     media?: Express.Multer.File;
+    buttonContent: string;
+}
+
+export interface UpdateMailingContentFormData {
+    content: string;
+    mediaType?: string;
+    media?: Express.Multer.File;
+    buttonContent: string;
+}
+
+export class UpdateMailingContentDto {
+    @ApiProperty({ 
+        description: 'Содержимое рассылки (текст)', 
+        example: 'Привет! Это обновленная рассылка.'
+    })
+    content: string;
+
+    @ApiProperty({ 
+        description: 'Тип медиа (photo, video, document, audio)', 
+        enum: ['photo', 'video', 'document', 'audio'],
+        required: false,
+        example: 'photo'
+    })
+    mediaType?: string;
+
+    @ApiProperty({ 
+        description: 'Медиа файл для рассылки', 
+        type: 'string', 
+        format: 'binary',
+        required: false 
+    })
+    media?: Express.Multer.File;
+
+    @ApiProperty({ 
+        description: 'Текст кнопки для рассылки',
+        type: 'string',
+        example: 'Перейти'
+    })
     buttonContent: string;
 }
