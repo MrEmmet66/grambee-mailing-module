@@ -3,11 +3,14 @@ import { AppModule } from './app.module';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import * as nodeCrypto from 'crypto';
+import { HttpExceptionFilter } from './filters/httpException.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
   app.useLogger(['error', 'warn', 'log', 'debug', 'verbose']);
+
+  app.useGlobalFilters(new HttpExceptionFilter());
 
   app.enableCors({
     origin: process.env.CORS_ORIGIN || '*',

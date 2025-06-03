@@ -45,6 +45,13 @@ export class BotSellersController {
     @Body() createBotSellerDto: CreateBotSellerDto,
     @UploadedFile() statisticsFile?: Express.Multer.File,
   ) {
+    // Handle the uploaded file if it exists
+    if (statisticsFile) {
+      console.log('Controller received statisticsFile:', statisticsFile.originalname);
+    }
+    console.log('Controller received createBotSellerDto:', createBotSellerDto);
+    
+
     // Form data often sends boolean values as strings, so we need to convert explicitly
     if (createBotSellerDto.isChannel !== undefined) {
       // Convert string 'true'/'false' to boolean

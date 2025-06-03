@@ -318,7 +318,7 @@ export class ApplicationsService {
                 if (!mailing) {
                     throw new HttpException(`Mailing with ID ${mailingId} not found`, HttpStatus.NOT_FOUND);
                 }
-                if(mailing.botToken !== null) {
+                if(mailing.botToken && mailing.isChannel) {
                     this.telegramService.setupWebhook(mailing.botToken || '');
                 }
                 console.log(`Mailing ${mailingId} status updated to APPROVED`);
@@ -340,6 +340,10 @@ export class ApplicationsService {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
+
+            const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
+
+            await this.telegramService.notifyUser(mailingOwnerTelegramId, "✅Ваша заявка на рассылку была одобрена!\n\nДля старта вам нужно забронировать дату рассылки у продавцов, после чего вы сможете начать рассылку.")
 
             return true;
         } catch (error) {
@@ -380,6 +384,9 @@ export class ApplicationsService {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
+            const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
+
+            await this.telegramService.notifyUser(mailingOwnerTelegramId, "❌Ваша заявка на рассылку была отклонена!\n\n");
 
             return true;
         } catch (error) {
@@ -420,6 +427,10 @@ export class ApplicationsService {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
+
+            const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
+
+            await this.telegramService.notifyUser(mailingOwnerTelegramId, "⏳Ваша заявка на рассылку была отправлена в ожидание! Пожалуйста, подождите пока мы тщательно её проверим.");
 
             return true;
         } catch (error) {

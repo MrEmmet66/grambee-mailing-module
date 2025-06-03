@@ -284,6 +284,7 @@ export class BotSellersService {
     this.logger.debug(`Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`);
     this.logger.debug(`isChannel type: ${typeof createBotSellerDto.isChannel}, value: ${createBotSellerDto.isChannel}`);
 
+
     if (createBotSellerDto.userId) {
       await this.validateUser(createBotSellerDto.userId);
       userId = createBotSellerDto.userId;
@@ -292,6 +293,27 @@ export class BotSellersService {
     } else {
       throw new BadRequestException('Either userId or telegramId must be provided');
     }
+
+    const existingBot = await this.prisma.botSeller.findFirst({
+      where: {
+        OR: [
+          { botToken: createBotSellerDto.botToken },
+          // ✅ Проверяем channelId только если он действительно передан и isChannel = true
+          ...(createBotSellerDto.isChannel === true && createBotSellerDto.channelId ? [{
+            channelId: createBotSellerDto.channelId,
+            isChannel: true
+          }] : [])
+        ]
+      }
+    });
+
+    console.log(existingBot);
+
+
+    if (existingBot) {
+      throw new BadRequestException('A bot with this token or channel ID already exists');
+    }
+
 
     if (!this.validateBotToken(createBotSellerDto.botToken)) {
       throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');

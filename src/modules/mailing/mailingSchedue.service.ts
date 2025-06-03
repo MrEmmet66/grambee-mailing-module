@@ -16,10 +16,16 @@ export class MailingScheduleService {
         this.logger.log("Running daily mailing task");
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000);
 
         const todayMailingReservations = await this.prismaService.mailingReservation.findMany({
             where: {
-                date: today,
+                date: {
+                    gte: startOfDay,
+                    lt: endOfDay
+                },
+                isProcessed: false,
                 mailing: {
                     isActive: true,
                     status: 'APPROVED'

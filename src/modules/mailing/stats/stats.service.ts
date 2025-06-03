@@ -1,33 +1,237 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "prisma/prisma.service";
-
-interface BotStatistics {
-    totalClicks: number;
-    uniqueClicks: number;
-    userStats: {
-        new: number;
-        dead: number;
-        premium: number;
-        rtl: number;
-    };
-    conversionStats: {
-        performedActions: number;
-        passedSponsors: number;
-        leftAfterStart: number;
-    };
-    audienceAnalysis: Record<string, { count: number; percentage: number }>;
-}
-
-interface ChannelStatistics {
-    cleanSubscribers: number;
-    subscriberTurnover: number;
-    audienceCountries: Record<string, { count: number; percentage: number }>;
-    resourceLink: string;
-}
+import { ConfigService } from "@nestjs/config";
+import { 
+    BotStatistics, 
+    ChannelStatistics, 
+    PeriodStatistics, 
+    UserMailingStatistics,
+    SellerStatistics,
+    SellerPeriodStatistics,
+    MonthlyUserStatistics,
+    MonthlySellerStatistics
+} from "./stats.types";
 
 @Injectable()
 export class StatsService {
-    constructor(private readonly prisma: PrismaService) {}
+    constructor(
+        private readonly prisma: PrismaService,
+        private readonly configService: ConfigService
+    ) {}
+
+    async getUserMailingStatistics(userId: number): Promise<UserMailingStatistics> {
+        const now = new Date();
+        const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+        // Get all mailing reservations for user's mailings
+        const reservations = await this.prisma.mailingReservation.findMany({
+            where: {
+                mailing: {
+                    userId: userId
+                },
+                adminApprovalStatus: 'APPROVED'
+            },
+            include: {
+                mailing: true,
+                botSeller: true,
+                MailingEntrances: true
+            },
+            orderBy: {
+                processedAt: 'asc'
+            }
+        });
+
+        // Calculate totals using unique entrances
+        const totalAudienceAttracted = this.calculateUniqueAudienceFromReservations(reservations);
+        const totalMailingsPurchased = reservations.length;
+        const totalMoneySpent = await this.calculateTotalMoneySpent(reservations);
+
+        // Calculate average daily volume
+        const firstReservationDate = reservations[0]?.processedAt;
+        const averageDailyVolume = this.calculateAverageDailyVolume(
+            totalAudienceAttracted,
+            firstReservationDate,
+            now
+        );
+
+        const mailingStats = await Promise.all(
+            reservations.map(async (reservation) => {
+                return {
+                    link: reservation.mailing.botLink || reservation.trackingLink || '',
+                    audienceAttracted: this.calculateUniqueAudienceFromReservations([reservation]),
+                    moneySpent: await this.calculateTotalMoneySpent([reservation]),
+                };
+            })
+        );
+
+        return {
+            totalAudienceAttracted,
+            totalMailingsPurchased,
+            averageDailyVolume,
+            totalMoneySpent,
+            periods: {
+                day: await this.calculatePeriodStatisticsByEntranceDate(reservations, dayAgo),
+                week: await this.calculatePeriodStatisticsByEntranceDate(reservations, weekAgo),
+                allTime: await this.calculatePeriodStatistics(reservations)
+            },
+            mailings: mailingStats
+        };
+    }
+
+    private async calculatePeriodStatisticsByEntranceDate(reservations: any[], fromDate: Date): Promise<PeriodStatistics> {
+        // Filter reservations that have entrances within the period
+        const reservationsWithRecentEntrances = reservations.map(reservation => ({
+            ...reservation,
+            MailingEntrances: reservation.MailingEntrances.filter(entrance => 
+                new Date(entrance.date) >= fromDate
+            )
+        })).filter(reservation => reservation.MailingEntrances.length > 0);
+
+        const audienceAttracted = this.calculateUniqueAudienceFromReservations(reservationsWithRecentEntrances);
+        const mailingsPurchased = reservationsWithRecentEntrances.length;
+        const moneySpent = await this.calculateTotalMoneySpentForPeriod(reservationsWithRecentEntrances);
+
+        return {
+            audienceAttracted,
+            moneySpent,
+            mailingsPurchased
+        };
+    }
+
+    private async calculateTotalMoneySpentForPeriod(reservations: any[]): Promise<number> {
+        let totalSpent = 0;
+
+        for (const reservation of reservations) {
+            const targetBot = await this.prisma.mailingTargetBots.findFirst({
+                where: {
+                    mailingId: reservation.mailingId,
+                    botSellerId: reservation.botSellerId
+                }
+            });
+
+            // Calculate unique entrances for this reservation (filtered entrances)
+            const uniqueUserIds = new Set();
+            if (reservation.MailingEntrances && reservation.MailingEntrances.length > 0) {
+                reservation.MailingEntrances.forEach(entrance => {
+                    uniqueUserIds.add(entrance.userTelegramId);
+                });
+            }
+            const entranceCount = uniqueUserIds.size;
+
+            if (targetBot?.paymentType === 'fixed') {
+                // For fixed payment, only count if there are entrances in this period
+                if (entranceCount > 0) {
+                    const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                    const serviceCommission = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+                    totalSpent += sellerPrice + serviceCommission;
+                }
+
+            } else if (targetBot?.paymentType === 'subscriber') {
+                // Per subscriber payment: calculate based on actual unique entrances in period
+                const pricePerSubscriber = reservation.botSeller.subscriberPrice || 0;
+                const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);
+                
+                const sellerAmount = pricePerSubscriber * entranceCount;
+                const serviceCommission = serviceCommissionPerUser * entranceCount;
+                totalSpent += sellerAmount + serviceCommission;
+
+            } else {
+                // Fallback to fixed price, only if there are entrances
+                if (entranceCount > 0) {
+                    const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                    const serviceCommission = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+                    totalSpent += sellerPrice + serviceCommission;
+                }
+            }
+        }
+
+        return totalSpent;
+    }
+
+    private async calculatePeriodStatistics(reservations: any[]): Promise<PeriodStatistics> {
+        const audienceAttracted = this.calculateUniqueAudienceFromReservations(reservations);
+        const mailingsPurchased = reservations.length;
+        const moneySpent = await this.calculateTotalMoneySpent(reservations);
+
+        return {
+            audienceAttracted,
+            moneySpent,
+            mailingsPurchased
+        };
+    }
+
+    private calculateUniqueAudienceFromReservations(reservations: any[]): number {
+        let totalUniqueUsers = 0;
+
+        // For each reservation, count unique users from MailingEntrances
+        reservations.forEach(reservation => {
+            const uniqueUserIds = new Set();
+            
+            if (reservation.MailingEntrances && reservation.MailingEntrances.length > 0) {
+                reservation.MailingEntrances.forEach(entrance => {
+                    uniqueUserIds.add(entrance.userTelegramId);
+                });
+            }
+            
+            totalUniqueUsers += uniqueUserIds.size;
+        });
+
+        return totalUniqueUsers;
+    }
+
+    private async calculateTotalMoneySpent(reservations: any[]): Promise<number> {
+        let totalSpent = 0;
+
+        for (const reservation of reservations) {
+            const targetBot = await this.prisma.mailingTargetBots.findFirst({
+                where: {
+                    mailingId: reservation.mailingId,
+                    botSellerId: reservation.botSellerId
+                }
+            });
+
+            // Calculate unique entrances for this reservation
+            const uniqueUserIds = new Set();
+            if (reservation.MailingEntrances && reservation.MailingEntrances.length > 0) {
+                reservation.MailingEntrances.forEach(entrance => {
+                    uniqueUserIds.add(entrance.userTelegramId);
+                });
+            }
+            const entranceCount = uniqueUserIds.size;
+
+            if (targetBot?.paymentType === 'fixed') {
+                // Fixed payment: seller price + service commission
+                const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                const serviceCommission = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+                totalSpent += sellerPrice + serviceCommission;
+
+            } else if (targetBot?.paymentType === 'subscriber') {
+                // Per subscriber payment: calculate based on actual unique entrances
+                const pricePerSubscriber = reservation.botSeller.subscriberPrice || 0;
+                const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);
+                
+                const sellerAmount = pricePerSubscriber * entranceCount;
+                const serviceCommission = serviceCommissionPerUser * entranceCount;
+                totalSpent += sellerAmount + serviceCommission;
+
+            } else {
+                // Fallback to fixed price
+                const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                const serviceCommission = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+                totalSpent += sellerPrice + serviceCommission;
+            }
+        }
+
+        return totalSpent;
+    }
+
+    private calculateAverageDailyVolume(totalAudience: number, startDate: Date | null, endDate: Date): number {
+        if (!startDate || totalAudience === 0) return 0;
+
+        const daysDifference = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000)));
+        return Math.round(totalAudience / daysDifference);
+    }
 
     async getBotStatistics(mailingReservationId: number): Promise<BotStatistics> {
         const reservation = await this.prisma.mailingReservation.findUnique({
@@ -92,6 +296,201 @@ export class StatsService {
             audienceCountries,
             resourceLink: reservation.trackingLink || botSeller.link
         };
+    }
+
+    async getSellerStatistics(userId: number): Promise<SellerStatistics> {
+        const now = new Date();
+        const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+        // Get all mailing reservations for all sellers owned by this user
+        const reservations = await this.prisma.mailingReservation.findMany({
+            where: {
+                botSeller: {
+                    userId: userId
+                },
+                adminApprovalStatus: 'APPROVED'
+            },
+            include: {
+                mailing: true,
+                botSeller: true,
+                MailingEntrances: true
+            },
+            orderBy: {
+                processedAt: 'asc'
+            }
+        });
+
+        // Calculate totals
+        const totalMoneyEarned = await this.calculateTotalMoneyEarned(reservations);
+        const totalMailingsSold = reservations.length;
+        const totalAudienceProvided = this.calculateUniqueAudienceFromReservations(reservations);
+
+        // Calculate average daily earnings - use the earliest entrance date if processedAt is null
+        let firstDate = reservations[0]?.processedAt;
+        if (!firstDate && reservations.length > 0) {
+            // If no processedAt, use the earliest entrance date
+            const allEntrances = reservations.flatMap(r => r.MailingEntrances);
+            if (allEntrances.length > 0) {
+                firstDate = allEntrances.reduce((earliest, entrance) => {
+                    const entranceDate = new Date(entrance.date);
+                    return !earliest || entranceDate < earliest ? entranceDate : earliest;
+                }, null as Date | null);
+            }
+        }
+
+        const averageDailyEarnings = this.calculateAverageDailyEarnings(
+            totalMoneyEarned,
+            firstDate,
+            now
+        );
+        const sellerStats = await Promise.all(
+            reservations.map(async (reservation) => {
+                return {
+                    link: reservation.botSeller.link || '',
+                    audienceProvided: this.calculateUniqueAudienceFromReservations([reservation]),
+                    moneyEarned: await this.calculateTotalMoneyEarned([reservation]),
+                };
+            })
+        );
+
+        return {
+            totalMoneyEarned,
+            totalMailingsSold,
+            averageDailyEarnings,
+            totalAudienceProvided,
+            periods: {
+                day: await this.calculateSellerPeriodStatisticsByEntranceDate(reservations, dayAgo),
+                week: await this.calculateSellerPeriodStatisticsByEntranceDate(reservations, weekAgo),
+                allTime: await this.calculateSellerPeriodStatistics(reservations)
+            },
+            sellers: sellerStats
+        };
+    }
+
+    private async calculateSellerPeriodStatisticsByEntranceDate(reservations: any[], fromDate: Date): Promise<SellerPeriodStatistics> {
+        // Filter reservations that have entrances within the period
+        const reservationsWithRecentEntrances = reservations.map(reservation => ({
+            ...reservation,
+            MailingEntrances: reservation.MailingEntrances.filter(entrance => 
+                new Date(entrance.date) >= fromDate
+            )
+        })).filter(reservation => reservation.MailingEntrances.length > 0);
+
+        const audienceProvided = this.calculateUniqueAudienceFromReservations(reservationsWithRecentEntrances);
+        const mailingsSold = reservationsWithRecentEntrances.length;
+        const moneyEarned = await this.calculateTotalMoneyEarnedForPeriod(reservationsWithRecentEntrances);
+
+        return {
+            audienceProvided,
+            moneyEarned,
+            mailingsSold
+        };
+    }
+
+    private async calculateSellerPeriodStatistics(reservations: any[]): Promise<SellerPeriodStatistics> {
+        const audienceProvided = this.calculateUniqueAudienceFromReservations(reservations);
+        const mailingsSold = reservations.length;
+        const moneyEarned = await this.calculateTotalMoneyEarned(reservations);
+
+        return {
+            audienceProvided,
+            moneyEarned,
+            mailingsSold
+        };
+    }
+
+    private async calculateTotalMoneyEarned(reservations: any[]): Promise<number> {
+        let totalEarned = 0;
+
+        for (const reservation of reservations) {
+            const targetBot = await this.prisma.mailingTargetBots.findFirst({
+                where: {
+                    mailingId: reservation.mailingId,
+                    botSellerId: reservation.botSellerId
+                }
+            });
+
+            // Calculate unique entrances for this reservation
+            const uniqueUserIds = new Set();
+            if (reservation.MailingEntrances && reservation.MailingEntrances.length > 0) {
+                reservation.MailingEntrances.forEach(entrance => {
+                    uniqueUserIds.add(entrance.userTelegramId);
+                });
+            }
+            const entranceCount = uniqueUserIds.size;
+
+            if (targetBot?.paymentType === 'fixed') {
+                // Fixed payment: only seller price (without service commission)
+                const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                totalEarned += sellerPrice;
+
+            } else if (targetBot?.paymentType === 'subscriber') {
+                // Per subscriber payment: calculate based on actual unique entrances
+                const pricePerSubscriber = reservation.botSeller.subscriberPrice || 0;
+                const sellerAmount = pricePerSubscriber * entranceCount;
+                totalEarned += sellerAmount;
+
+            } else {
+                // Fallback to fixed price
+                const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                totalEarned += sellerPrice;
+            }
+        }
+
+        return totalEarned;
+    }
+
+    private async calculateTotalMoneyEarnedForPeriod(reservations: any[]): Promise<number> {
+        let totalEarned = 0;
+
+        for (const reservation of reservations) {
+            const targetBot = await this.prisma.mailingTargetBots.findFirst({
+                where: {
+                    mailingId: reservation.mailingId,
+                    botSellerId: reservation.botSellerId
+                }
+            });
+
+            // Calculate unique entrances for this reservation (filtered entrances)
+            const uniqueUserIds = new Set();
+            if (reservation.MailingEntrances && reservation.MailingEntrances.length > 0) {
+                reservation.MailingEntrances.forEach(entrance => {
+                    uniqueUserIds.add(entrance.userTelegramId);
+                });
+            }
+            const entranceCount = uniqueUserIds.size;
+
+            if (targetBot?.paymentType === 'fixed') {
+                // For fixed payment, only count if there are entrances in this period
+                if (entranceCount > 0) {
+                    const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                    totalEarned += sellerPrice;
+                }
+
+            } else if (targetBot?.paymentType === 'subscriber') {
+                // Per subscriber payment: calculate based on actual unique entrances in period
+                const pricePerSubscriber = reservation.botSeller.subscriberPrice || 0;
+                const sellerAmount = pricePerSubscriber * entranceCount;
+                totalEarned += sellerAmount;
+
+            } else {
+                // Fallback to fixed price, only if there are entrances
+                if (entranceCount > 0) {
+                    const sellerPrice = reservation.botSeller.fixedPrice || 0;
+                    totalEarned += sellerPrice;
+                }
+            }
+        }
+
+        return totalEarned;
+    }
+
+    private calculateAverageDailyEarnings(totalEarnings: number, startDate: Date | null, endDate: Date): number {
+        if (!startDate || totalEarnings === 0) return 0;
+
+        const daysDifference = Math.max(1, Math.ceil((endDate.getTime() - startDate.getTime()) / (24 * 60 * 60 * 1000)));
+        return parseFloat((totalEarnings / daysDifference).toFixed(2));
     }
 
     async formatBotStatistics(stats: BotStatistics): Promise<string> {
@@ -318,5 +717,213 @@ ${Object.entries(stats.audienceCountries)
         });
 
         return { success: true, message: 'Mailing frozen for review' };
+    }
+
+    async getUserMonthlyStatistics(userId: number, months: number): Promise<MonthlyUserStatistics[]> {
+        const now = new Date();
+        const startDate = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+
+        // Get all mailing reservations for user's mailings within the period
+        const reservations = await this.prisma.mailingReservation.findMany({
+            where: {
+                mailing: {
+                    userId: userId
+                },
+                adminApprovalStatus: 'APPROVED',
+                MailingEntrances: {
+                    some: {
+                        date: {
+                            gte: startDate
+                        }
+                    }
+                }
+            },
+            include: {
+                mailing: true,
+                botSeller: true,
+                MailingEntrances: {
+                    where: {
+                        date: {
+                            gte: startDate
+                        }
+                    }
+                }
+            }
+        });
+
+        return await this.groupUserReservationsByMonth(reservations, months);
+    }
+
+    async getSellerMonthlyStatistics(userId: number, months: number): Promise<MonthlySellerStatistics[]> {
+        const now = new Date();
+        const startDate = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+
+        // Get all mailing reservations for all sellers owned by this user within the period
+        const reservations = await this.prisma.mailingReservation.findMany({
+            where: {
+                botSeller: {
+                    userId: userId
+                },
+                adminApprovalStatus: 'APPROVED',
+                MailingEntrances: {
+                    some: {
+                        date: {
+                            gte: startDate
+                        }
+                    }
+                }
+            },
+            include: {
+                mailing: true,
+                botSeller: true,
+                MailingEntrances: {
+                    where: {
+                        date: {
+                            gte: startDate
+                        }
+                    }
+                }
+            }
+        });
+
+        return await this.groupSellerReservationsByMonth(reservations, months);
+    }
+
+    private async groupUserReservationsByMonth(reservations: any[], months: number): Promise<MonthlyUserStatistics[]> {
+        const now = new Date();
+        const monthlyData = new Map<string, any>();
+
+        // Initialize all months with zero values
+        for (let i = months - 1; i >= 0; i--) {
+            const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            
+            monthlyData.set(monthKey, {
+                month: monthKey,
+                audienceAttracted: 0,
+                moneySpent: 0,
+                mailingsPurchased: 0,
+                reservations: []
+            });
+        }
+
+        // Group entrances by month and reservation
+        for (const reservation of reservations) {
+            const entrancesByMonth = new Map<string, any[]>();
+            
+            for (const entrance of reservation.MailingEntrances) {
+                const entranceDate = new Date(entrance.date);
+                const monthKey = `${entranceDate.getFullYear()}-${String(entranceDate.getMonth() + 1).padStart(2, '0')}`;
+                
+                if (monthlyData.has(monthKey)) {
+                    if (!entrancesByMonth.has(monthKey)) {
+                        entrancesByMonth.set(monthKey, []);
+                    }
+                    entrancesByMonth.get(monthKey)!.push(entrance);
+                }
+            }
+
+            // Process each month that has entrances for this reservation
+            for (const [monthKey, monthEntrances] of entrancesByMonth) {
+                const monthData = monthlyData.get(monthKey)!;
+                
+                // Create a filtered reservation for this month
+                const monthReservation = {
+                    ...reservation,
+                    MailingEntrances: monthEntrances
+                };
+
+                monthData.reservations.push(monthReservation);
+            }
+        }
+
+        // Calculate statistics for each month
+        const results: MonthlyUserStatistics[] = [];
+        for (const [monthKey, monthData] of monthlyData) {
+            if (monthData.reservations.length > 0) {
+                const audience = this.calculateUniqueAudienceFromReservations(monthData.reservations);
+                const uniqueReservations = new Set(monthData.reservations.map(r => r.id)).size;
+                const moneySpent = await this.calculateTotalMoneySpentForPeriod(monthData.reservations);
+                
+                monthData.audienceAttracted = audience;
+                monthData.moneySpent = moneySpent;
+                monthData.mailingsPurchased = uniqueReservations;
+            }
+
+            // Remove the reservations array before returning
+            delete monthData.reservations;
+            results.push(monthData);
+        }
+
+        return results;
+    }
+
+    private async groupSellerReservationsByMonth(reservations: any[], months: number): Promise<MonthlySellerStatistics[]> {
+        const now = new Date();
+        const monthlyData = new Map<string, any>();
+
+        // Initialize all months with zero values
+        for (let i = months - 1; i >= 0; i--) {
+            const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+            const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            
+            monthlyData.set(monthKey, {
+                month: monthKey,
+                audienceProvided: 0,
+                moneyEarned: 0,
+                mailingsSold: 0,
+                reservations: []
+            });
+        }
+
+        // Group entrances by month and reservation
+        for (const reservation of reservations) {
+            const entrancesByMonth = new Map<string, any[]>();
+            
+            for (const entrance of reservation.MailingEntrances) {
+                const entranceDate = new Date(entrance.date);
+                const monthKey = `${entranceDate.getFullYear()}-${String(entranceDate.getMonth() + 1).padStart(2, '0')}`;
+                
+                if (monthlyData.has(monthKey)) {
+                    if (!entrancesByMonth.has(monthKey)) {
+                        entrancesByMonth.set(monthKey, []);
+                    }
+                    entrancesByMonth.get(monthKey)!.push(entrance);
+                }
+            }
+
+            // Process each month that has entrances for this reservation
+            for (const [monthKey, monthEntrances] of entrancesByMonth) {
+                const monthData = monthlyData.get(monthKey)!;
+                
+                // Create a filtered reservation for this month
+                const monthReservation = {
+                    ...reservation,
+                    MailingEntrances: monthEntrances
+                };
+
+                monthData.reservations.push(monthReservation);
+            }
+        }
+
+        // Calculate statistics for each month
+        const results: MonthlySellerStatistics[] = [];
+        for (const [monthKey, monthData] of monthlyData) {
+            if (monthData.reservations.length > 0) {
+                const audience = this.calculateUniqueAudienceFromReservations(monthData.reservations);
+                const uniqueReservations = new Set(monthData.reservations.map(r => r.id)).size;
+                const moneyEarned = await this.calculateTotalMoneyEarnedForPeriod(monthData.reservations);
+                
+                monthData.audienceProvided = audience;
+                monthData.moneyEarned = moneyEarned;
+                monthData.mailingsSold = uniqueReservations;
+            }
+
+            // Remove the reservations array before returning
+            delete monthData.reservations;
+            results.push(monthData);
+        }
+
+        return results;
     }
 }

@@ -1,7 +1,64 @@
-import { Controller } from "@nestjs/common";
+import { Controller, Get, Param, ParseIntPipe, Query } from "@nestjs/common";
+import { StatsService } from "./stats.service";
+import { UserMailingStatistics, BotStatistics, ChannelStatistics, SellerStatistics, MonthlyUserStatistics, MonthlySellerStatistics } from "./stats.types";
 
 @Controller('stats')
 export class StatsController {
+    constructor(private readonly statsService: StatsService) {}
+
     // This controller will handle all the statistics-related endpoints
     // For example, you can add methods to get statistics about mailings, reservations, etc.
+
+    @Get('user/:userId/mailings')
+    async getUserMailingStatistics(@Param('userId', ParseIntPipe) userId: number): Promise<UserMailingStatistics> {
+        return await this.statsService.getUserMailingStatistics(userId);
+    }
+
+    @Get('user/:userId/mailings/monthly')
+    async getUserMonthlyStatistics(
+        @Param('userId', ParseIntPipe) userId: number,
+        @Query('months', ParseIntPipe) months: number
+    ): Promise<MonthlyUserStatistics[]> {
+        return await this.statsService.getUserMonthlyStatistics(userId, months);
+    }
+
+    @Get('seller/:userId/mailings')
+    async getSellerStatistics(@Param('userId', ParseIntPipe) userId: number): Promise<SellerStatistics> {
+        return await this.statsService.getSellerStatistics(userId);
+    }
+
+    @Get('seller/:userId/mailings/monthly')
+    async getSellerMonthlyStatistics(
+        @Param('userId', ParseIntPipe) userId: number,
+        @Query('months', ParseIntPipe) months: number
+    ): Promise<MonthlySellerStatistics[]> {
+        return await this.statsService.getSellerMonthlyStatistics(userId, months);
+    }
+
+    @Get('reservation/:reservationId/bot')
+    async getBotStatistics(@Param('reservationId', ParseIntPipe) reservationId: number): Promise<{ raw: BotStatistics; formatted: string }> {
+        const stats = await this.statsService.getBotStatistics(reservationId);
+        const formatted = await this.statsService.formatBotStatistics(stats);
+        
+        return {
+            raw: stats,
+            formatted
+        };
+    }
+
+    @Get('reservation/:reservationId/channel')
+    async getChannelStatistics(@Param('reservationId', ParseIntPipe) reservationId: number): Promise<{ raw: ChannelStatistics; formatted: string }> {
+        const stats = await this.statsService.getChannelStatistics(reservationId);
+        const formatted = await this.statsService.formatChannelStatistics(stats);
+        
+        return {
+            raw: stats,
+            formatted
+        };
+    }
+
+    @Get('reservation/:reservationId/details')
+    async getMailingReservationDetails(@Param('reservationId', ParseIntPipe) reservationId: number) {
+        return await this.statsService.getMailingReservationDetails(reservationId);
+    }
 }

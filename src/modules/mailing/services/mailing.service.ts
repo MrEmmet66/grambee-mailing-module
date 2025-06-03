@@ -2,7 +2,7 @@
 https://docs.nestjs.com/providers#services
 */
 
-import { ConflictException, forwardRef, Inject, Injectable, InternalServerErrorException, Logger, NotAcceptableException, NotFoundException } from '@nestjs/common';
+import { ConflictException, forwardRef, Inject, Injectable, InternalServerErrorException, Logger, NotAcceptableException, NotFoundException, PreconditionFailedException } from '@nestjs/common';
 import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData } from '../dto/createMailing.dto';
 import { PrismaService } from 'prisma/prisma.service';
 import { CreateMailingReservationDto, MailingFilters } from '../dto/createMailingReservation.dto';
@@ -17,6 +17,7 @@ import { ApplicationsService } from '../../telegram/applications.service';
 import { MailingNotifyProps } from 'src/modules/telegram/telegram.types';
 import { mkdirSync } from 'fs';
 import { BotSeller, MailingTargetBots } from '@prisma/client';
+import { BalanceService } from '../../balance/balance.service';
 
 @Injectable()
 export class MailingService {
@@ -28,7 +29,7 @@ export class MailingService {
         private applicationsService: ApplicationsService,
         @Inject(forwardRef(() => TelegramService))
         private readonly telegramService: TelegramService,
-
+        private readonly balanceService: BalanceService,
         private httpService: HttpService,
         private configService: ConfigService,
     ) { }
@@ -43,6 +44,19 @@ export class MailingService {
                 mailing: true
             }
         });
+    }
+
+    async getMailingOwnerTelegramId(mailingId: number) {
+        const mailing = await this.prismaService.mailing.findUnique({
+            where: { id: mailingId },
+            include: { user: true }
+        });
+
+        if (!mailing) {
+            throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
+        }
+
+        return mailing.user.telegramId;
     }
 
     async deleteMailing(mailingId: number) {
@@ -125,6 +139,31 @@ export class MailingService {
         });
     }
 
+    async checkAndDeactivateMailing(mailingId: number) {
+        const remainingReservations = await this.prismaService.mailingReservation.count({
+            where: {
+                mailingId: mailingId,
+                isProcessed: false,
+                adminApprovalStatus: 'APPROVED'
+            }
+        });
+
+        if (remainingReservations === 0) {
+            const updatedMailing = await this.prismaService.mailing.update({
+                where: { id: mailingId },
+                data: {
+                    isActive: false,
+                    status: 'COMPLETED'
+                }
+            });
+
+            this.logger.log(`Mailing ${mailingId} completed and deactivated`);
+            return updatedMailing;
+        }
+
+        return null;
+    }
+
     async updateMailingContent(mailingId: number, updateData: UpdateMailingContentFormData) {
         return await this.prismaService.mailing.update({
             where: { id: mailingId },
@@ -173,18 +212,20 @@ export class MailingService {
             // Determine if this is a channel mailing based on channelId presence
             const isChannel = !!dto.channelId;
 
-            const channelInfo = await this.telegramService.getChatInfo(dto.channelId || '', dto.botToken || '');
-            console.log(`Channel info: ${JSON.stringify(channelInfo)}`);
-            if (!channelInfo || !channelInfo.ok) {
-                throw new NotFoundException(`Channel with ID ${dto.channelId} not found or bot token is invalid`);
+            if (isChannel && dto.channelId && dto.botToken) {
+                const channelInfo = await this.telegramService.getChatInfo(dto.channelId || '', dto.botToken || '');
+                console.log(`Channel info: ${JSON.stringify(channelInfo)}`);
+                if (!channelInfo || !channelInfo.ok) {
+                    throw new NotFoundException(`Channel with ID ${dto.channelId} not found or bot token is invalid`);
+                }
             }
 
             const existingMailing = await this.prismaService.mailing.findFirst({
                 where: {
                     OR: [
-                        { botToken: dto.botToken },
-                        { channelId: dto.channelId },
-                        { botLink: dto.botLink }
+                        ...(dto.botToken ? [{ botToken: dto.botToken }] : []),
+                        ...(dto.channelId ? [{ channelId: dto.channelId }] : []),
+                        ...(dto.botLink ? [{ botLink: dto.botLink }] : [])
                     ]
                 }
             });
@@ -246,7 +287,6 @@ export class MailingService {
     }
 
     async toggleMailingStatus(mailingId: number) {
-        const gatewayUrl = this.configService.get<string>('GATEWAY_URL');
         const mailing = await this.prismaService.mailing.findUnique({
             where: {
                 id: mailingId
@@ -275,25 +315,6 @@ export class MailingService {
 
         if (mailing.isActive) {
             throw new ConflictException('Mailing is already active');
-        }
-
-
-        let totalAmount = 0;
-        mailingReservations.forEach(reservation => {
-            totalAmount += reservation.heldAmount;
-        });
-
-        try {
-            const holdEndpoint = `${gatewayUrl}api/v1/balance/${mailing.user.telegramId}/hold`;
-            const holdData = {
-                amount: totalAmount * 1.0,
-                description: `Удержание баланса за рассылку #${mailingId} с ${mailingReservations.length} каналами.`,
-                telegramId: mailing.user.telegramId.toString()
-            };
-
-            await this.httpService.post(holdEndpoint, holdData).toPromise();
-        } catch (error) {
-            throw new InternalServerErrorException('Failed to hold balance for mailing: ' + error);
         }
 
         return await this.prismaService.mailing.update({
@@ -347,16 +368,19 @@ export class MailingService {
             throw new NotFoundException('Mailing not found');
         }
 
-    
+        // Получаем комиссии сервиса из конфига
+        const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+        const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);
 
         let heldAmount = 0;
+        let baseAmount = 0;
+        let serviceCommission = 0;
 
         if (dto.paymentType === 'fixed') {
-            // Для фиксированной оплаты: цена продавца + $25 комиссия
-            const sellerPrice = botSeller.fixedPrice || 0;
-            const serviceCommission = 25;
-            heldAmount = sellerPrice + serviceCommission;
-
+            // Для фиксированной оплаты берем fixedPrice продавца
+            baseAmount = botSeller.fixedPrice || 0;
+            serviceCommission = serviceCommissionFixed;
+            heldAmount = baseAmount + serviceCommission;
         } else if (dto.paymentType === 'subscriber') {
             if (mailing.botToken === null) {
                 throw new ConflictException('Bot token is required for per subscriber payment type');
@@ -364,47 +388,74 @@ export class MailingService {
 
             if (mailing.isChannel && mailing.channelId !== null) {
                 const channelInfo = await this.telegramService.getChatInfo(mailing.channelId, mailing.botToken);
-                console.log(`Channel info: ${JSON.stringify(channelInfo)}`);
-                
+                this.logger.log(`Channel info: ${JSON.stringify(channelInfo)}`);
+
                 if (!channelInfo || !channelInfo.ok) {
                     throw new NotFoundException(`Channel with ID ${mailing.channelId} not found or bot token is invalid`);
                 }
 
-                if(channelInfo.result.username) {
+                if (channelInfo.result.username) {
                     throw new NotAcceptableException(`Per subscriber payment type is not supported for public channels`);
                 }
-
-
             }
 
-            // Для оплаты за подписчика: максимальная сумма с учетом комиссии
+            // Для оплаты за подписчика
             const maxUsers = botSeller.botLiveAudience || botSeller.channelAudience || 0;
             if (maxUsers <= 0) {
-                const fixedPrice = botSeller.fixedPrice || 0;
-                heldAmount = fixedPrice + this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
-
-            }
-            else {
+                // Если нет данных об аудитории, используем фиксированную оплату
+                baseAmount = botSeller.fixedPrice || 0;
+                serviceCommission = serviceCommissionFixed;
+            } else {
                 const pricePerUser = botSeller.subscriberPrice || 0;
-                const serviceCommissionPerUser = 0.03;
+                if (baseAmount <= 0 || maxUsers <= 0) {
+                    baseAmount = botSeller.fixedPrice || 0;
+                    serviceCommission = serviceCommissionFixed;
+                }
+                else {
+                    baseAmount = pricePerUser * maxUsers;
+                    serviceCommission = serviceCommissionPerUser * maxUsers;
+                }
 
-                heldAmount = (pricePerUser + serviceCommissionPerUser) * maxUsers;
             }
-
+            heldAmount = baseAmount + serviceCommission;
         } else {
-            // Fallback
-            heldAmount = (botSeller.fixedPrice || 0) + 25;
+            // Fallback к фиксированной оплате
+            baseAmount = botSeller.fixedPrice || 0;
+            serviceCommission = serviceCommissionFixed;
+            heldAmount = baseAmount + serviceCommission;
         }
+
+        // Получаем пользователя из мейлинга для холда баланса
+        const user = await this.prismaService.user.findUnique({
+            where: { id: mailing.userId }
+        });
+
+        if (!user) {
+            throw new NotFoundException('User not found');
+        }
+
+        // Попытка холда баланса
+        try {
+            this.logger.log(`Holding balance for mailing reservation: ${heldAmount}`);
+            await this.balanceService.holdBalance(user.telegramId.toString(), {
+                amount: Number((heldAmount / 100).toFixed(2)),
+                description: `Удержание баланса за резервирование рассылки #${dto.mailingId} для канала ${botSeller.link}. Базовая стоимость: ${baseAmount}, комиссия сервиса: ${serviceCommission}.`
+            });
+        } catch (error) {
+            this.logger.error(`Failed to hold balance for mailing reservation: ${error.message}`);
+            throw new PreconditionFailedException(`Не удалось зарезервировать средства: ${error.message}`);
+        }
+
         let trackingLink = await this.telegramService.generateTrackingLink(mailing.isChannel, mailing.channelId, dto.mailingId, dto.sellerId, botSeller.link, mailing.botToken || botSeller.botToken);
 
         // Create the reservation
         const reservation = await this.prismaService.mailingReservation.create({
             data: {
-                mailingId: dto.mailingId,
-                botSellerId: dto.sellerId,
+                mailingId: Number(dto.mailingId),
+                botSellerId: Number(dto.sellerId),
                 date: dto.date,
                 selectedFilters: jsonSelectedFilters,
-                heldAmount: heldAmount, // Use fixed price if available, otherwise 0
+                heldAmount: parseFloat(heldAmount.toString()),
                 trackingLink: trackingLink
             }
         });
@@ -414,24 +465,23 @@ export class MailingService {
             where: {
                 botSellerId: dto.sellerId,
                 mailingId: dto.mailingId,
-                paymentType: dto.paymentType || 'fixed' // Default to 'fixed' if not provided
+                paymentType: dto.paymentType || 'fixed'
             }
         });
 
         if (!existingTargetBot) {
-
             // Create MailingTargetBots record with the tracking link
             await this.prismaService.mailingTargetBots.create({
                 data: {
                     botSellerId: dto.sellerId,
                     mailingId: dto.mailingId,
                     link: trackingLink,
-                    paymentType: dto.paymentType || 'fixed', // Default to 'fixed' if not provided
+                    paymentType: dto.paymentType || 'fixed',
                 }
-            }); 
+            });
         }
 
-        return {reservation, seller: botSeller};
+        return { reservation, seller: botSeller };
     }
 
     async processMailing(reservation) {
@@ -501,6 +551,8 @@ export class MailingService {
 
         // Update mailing statistics
         await this.updateMailingStatistics(botSeller, mailing);
+
+        const completedMailing = await this.checkAndDeactivateMailing(mailing.id);
 
         const props: MailingNotifyProps = {
             isChannel: botSeller.isChannel,

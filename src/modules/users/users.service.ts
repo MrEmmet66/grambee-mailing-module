@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto';
 
@@ -37,12 +37,19 @@ export class UsersService {
   }
 
   async findByTelegramId(telegramId: string) {
-    return this.prisma.user.findUnique({
+    const user = await this.prisma.user.findUnique({
       where: { telegramId },
       include: {
         BotSeller: true,
       },
     });
+
+    if (!user) {
+      throw new NotFoundException(`User with telegramId ${telegramId} not found`);
+    }
+
+    return user;
+
   }
 
   async update(id: number, updateUserDto: UpdateUserDto) {
