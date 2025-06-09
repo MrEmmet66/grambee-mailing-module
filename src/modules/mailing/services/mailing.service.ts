@@ -203,7 +203,20 @@ export class MailingService {
             buttonText: dto.buttonContent || 'No button'
         })}`);
 
+        // get user by id or telegramId
+        const user = await this.prismaService.user.findFirst({
+            where: {
+                OR: [
+                    { id: dto.userId },
+                    { telegramId: String(dto.userId) } // Support both ID and Telegram ID
+                ]
+            }
+        });
 
+
+        if (!user) {
+            throw new NotFoundException(`User with ID ${dto.userId} not found`);
+        }
 
         // If there's a media file, use its path
         const mediaPath = dto.media ? `/uploads/${dto.media.filename}` : null;
@@ -254,7 +267,7 @@ export class MailingService {
             const mailing = await this.prismaService.mailing.create({
                 data: {
                     botToken: dto.botToken,
-                    userId: dto.userId,
+                    userId: user.id,
                     channelId: dto.channelId,
                     botLink: dto.botLink,
                     isChannel: isChannel,
@@ -279,9 +292,15 @@ export class MailingService {
     }
 
     async getUserMailings(userId: number) {
+        this.logger.log(`Getting mailings for user ID: ${userId}`);
+        console.log(`Getting mailings for user ID: ${userId}`);
+        
         return await this.prismaService.mailing.findMany({
             where: {
-                userId: userId
+                user: { telegramId: String(userId) } // Support both ID and Telegram ID
+            },
+            include: {
+                user: true,
             }
         })
     }

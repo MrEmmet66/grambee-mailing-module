@@ -881,14 +881,20 @@ export class ApplicationsService {
             console.error('Error getting statistics:', error);
             await ctx.answerCbQuery('Ошибка при получении статистики');
         }
-    }
-
-    private async handleConfirmApprove(ctx: Context) {
+    }    private async handleConfirmApprove(ctx: Context) {
         try {
             const reservationId = this.extractReservationId(ctx);
             console.log(`Confirming approval for reservation: ${reservationId}`);
 
             const result = await this.mailingPaymentService.approveMailingPayment(Number(reservationId));
+
+            // Get reservation details for notifications
+            const reservation = await this.statsService.getMailingReservationDetails(Number(reservationId));
+
+            // Send notifications to customer and seller
+            if (reservation) {
+                await this.sendApprovalNotifications(reservation, result);
+            }
 
             const successMessage = `
 ✅ **РАССЫЛКА ОДОБРЕНА И ОПЛАЧЕНА**
@@ -902,6 +908,8 @@ export class ApplicationsService {
 ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additionalCharge}р` : ''}
 
 🕒 **Время обработки:** ${new Date().toLocaleString('ru-RU')}
+
+📱 **Уведомления отправлены:** заказчику и исполнителю
             `;
 
             await ctx.editMessageText(successMessage, {
@@ -918,41 +926,20 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
             // Restore original keyboard on error
             await this.restoreOriginalKeyboard(ctx, this.extractReservationId(ctx));
         }
-    }
-
-    private async handleConfirmFreeze(ctx: Context) {
+    }    private async handleConfirmFreeze(ctx: Context) {
         try {
             const reservationId = this.extractReservationId(ctx);
             console.log(`Confirming freeze for reservation: ${reservationId}`);
 
-            await this.mailingPaymentService.freezeMailingPayment(Number(reservationId), 'Заморожена администратором для подробного рассмотрения');
+            const freezeReason = 'Заморожена администратором для подробного рассмотрения';
+            await this.mailingPaymentService.freezeMailingPayment(Number(reservationId), freezeReason);
 
+            // Get reservation details for notifications
             const reservation = await this.statsService.getMailingReservationDetails(Number(reservationId));
 
-            // Notify customer and seller about freeze
+            // Send notifications to customer and seller
             if (reservation) {
-                const customerMessage = `
-❄️ **ВАША РЕКЛАМА ЗАМОРОЖЕНА**
-
-Ваша реклама в рассылке #${reservation.mailingId} заморожена и находится на подробном рассмотрении у администрации.
-
-Деньги не списаны и остаются в холде до решения администрации.
-                `;
-
-                const sellerMessage = `
-❄️ **РЕКЛАМА ЗАМОРОЖЕНА**
-
-Реклама в вашем боте/канале заморожена и находится на подробном рассмотрении у администрации.
-
-Оплата приостановлена до решения администрации.
-                `;
-
-                try {
-                    await this.bot.telegram.sendMessage(reservation.mailing.user.telegramId, customerMessage, { parse_mode: 'Markdown' });
-                    await this.bot.telegram.sendMessage(reservation.botSeller.user.telegramId, sellerMessage, { parse_mode: 'Markdown' });
-                } catch (notificationError) {
-                    console.error('Error sending freeze notifications:', notificationError);
-                }
+                await this.sendFreezeNotifications(reservation, freezeReason);
             }
 
             const freezeMessage = `
@@ -960,9 +947,10 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
 
 🆔 **ID резервации:** #${reservationId}
 🕒 **Время заморозки:** ${new Date().toLocaleString('ru-RU')}
+📝 **Причина:** ${freezeReason}
 
-Деньги не списаны. Уведомления отправлены заказчику и исполнителю.
-Реклама находится на подробном рассмотрении у администрации.
+💰 **Деньги не списаны** и остаются в холде до решения администрации.
+📱 **Уведомления отправлены:** заказчику и исполнителю
             `;
 
             await ctx.editMessageText(freezeMessage, {
@@ -993,9 +981,7 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
             console.error('Error cancelling action:', error);
             await ctx.answerCbQuery('Ошибка при отмене действия');
         }
-    }
-
-    private async restoreOriginalKeyboard(ctx: Context, reservationId: string) {
+    }    private async restoreOriginalKeyboard(ctx: Context, reservationId: string) {
         const originalKeyboard = {
             inline_keyboard: [
                 [
@@ -1010,6 +996,95 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
         };
 
         await ctx.editMessageReplyMarkup(originalKeyboard as any);
+    }
+
+    // ✅ Новый метод для отправки уведомлений об одобрении
+    private async sendApprovalNotifications(reservation: any, paymentResult: any) {
+        try {
+            // Уведомление заказчику (владельцу рассылки)
+            const customerMessage = `
+✅ **ВАША РЕКЛАМА ОДОБРЕНА И ОПЛАЧЕНА**
+
+🆔 **ID рассылки:** #${reservation.mailingId}
+💰 **Списано с баланса:** ${paymentResult.totalPayment}р
+📊 **Переходов зафиксировано:** ${paymentResult.entranceCount}
+🔒 **Было в холде:** ${paymentResult.originalHold}р
+${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentResult.additionalCharge}р` : ''}
+
+📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
+
+Спасибо за использование нашего сервиса! 🚀
+            `;
+
+            // Уведомление исполнителю (владельцу бота)
+            const sellerMessage = `
+💰 **ОПЛАТА ЗА РЕКЛАМУ ЗАЧИСЛЕНА**
+
+🆔 **ID рассылки:** #${reservation.mailingId}
+💵 **Зачислено на баланс:** ${paymentResult.sellerAmount}р
+🏢 **Комиссия сервиса:** ${paymentResult.serviceCommission}р
+📊 **Переходов:** ${paymentResult.entranceCount}
+
+📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
+👤 **Заказчик:** @${reservation.mailing.user.username || 'неизвестно'}
+
+Отличная работа! Продолжайте зарабатывать с нами! 💪
+            `;
+
+            // Отправляем уведомления
+            await this.bot.telegram.sendMessage(reservation.mailing.user.telegramId, customerMessage, { parse_mode: 'Markdown' });
+            await this.bot.telegram.sendMessage(reservation.botSeller.user.telegramId, sellerMessage, { parse_mode: 'Markdown' });
+
+            console.log(`Approval notifications sent for reservation ${reservation.id}`);
+        } catch (error) {
+            console.error('Error sending approval notifications:', error);
+        }
+    }
+
+    // ✅ Новый метод для отправки уведомлений о заморозке
+    private async sendFreezeNotifications(reservation: any, reason: string) {
+        try {
+            // Уведомление заказчику (владельцу рассылки)
+            const customerMessage = `
+❄️ **ВАША РЕКЛАМА ЗАМОРОЖЕНА**
+
+🆔 **ID рассылки:** #${reservation.mailingId}
+📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
+
+**Причина:** ${reason}
+
+💰 **Деньги не списаны** и остаются в холде до решения администрации.
+
+Администрация рассмотрит вашу рекламу дополнительно. Ожидайте решения.
+            `;
+
+            // Уведомление исполнителю (владельцу бота)
+            const sellerMessage = `
+❄️ **РЕКЛАМА ЗАМОРОЖЕНА**
+
+🆔 **ID рассылки:** #${reservation.mailingId}
+📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
+👤 **Заказчик:** @${reservation.mailing.user.username || 'неизвестно'}
+
+**Причина:** ${reason}
+
+💰 **Оплата приостановлена** до решения администрации.
+
+Администрация рассмотрит рекламу дополнительно. Ожидайте решения.
+            `;
+
+            // Отправляем уведомления
+            await this.bot.telegram.sendMessage(reservation.mailing.user.telegramId, customerMessage, { parse_mode: 'Markdown' });
+            await this.bot.telegram.sendMessage(reservation.botSeller.user.telegramId, sellerMessage, { parse_mode: 'Markdown' });
+
+            console.log(`Freeze notifications sent for reservation ${reservation.id}`);
+        } catch (error) {
+            console.error('Error sending freeze notifications:', error);
+        }
     }
 
     private extractReservationId(ctx: Context): string {

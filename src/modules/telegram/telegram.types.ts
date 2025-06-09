@@ -9,4 +9,5 @@ export type MailingNotifyProps = {
     fixedPrice: number;
     subscriberPrice: number;
     reservationId: number;
+    isLastMailing?: boolean; // ✅ Добавляем флаг последней рассылки
 }
