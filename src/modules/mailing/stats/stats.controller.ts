@@ -14,6 +14,8 @@ export class StatsController {
         return await this.statsService.getUserMailingStatistics(userId);
     }
 
+    
+
     @Get('user/:userId/mailings/monthly')
     async getUserMonthlyStatistics(
         @Param('userId', ParseIntPipe) userId: number,
@@ -25,6 +27,10 @@ export class StatsController {
     @Get('seller/:userId/mailings')
     async getSellerStatistics(@Param('userId', ParseIntPipe) userId: number): Promise<SellerStatistics> {
         return await this.statsService.getSellerStatistics(userId);
+    }    // endpoint for statistics of certain bot by ID
+    @Get('bot/:botId')
+    async getBotStatisticsById(@Param('botId', ParseIntPipe) botId: number): Promise<SellerStatistics> {
+        return await this.statsService.getBotStatisticsById(botId);
     }
 
     @Get('seller/:userId/mailings/monthly')

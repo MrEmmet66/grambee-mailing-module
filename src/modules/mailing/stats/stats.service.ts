@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "prisma/prisma.service";
 import { ConfigService } from "@nestjs/config";
 import { 
@@ -17,7 +17,92 @@ export class StatsService {
     constructor(
         private readonly prisma: PrismaService,
         private readonly configService: ConfigService
-    ) {}
+    ) {}    async getBotStatisticsById(botId: number): Promise<SellerStatistics> {
+        // Проверяем существование бота
+        const botSeller = await this.prisma.botSeller.findUnique({
+            where: { id: botId }
+        });
+
+        if (!botSeller) {
+            throw new NotFoundException(`Bot seller with id ${botId} not found`);
+        }
+
+        const now = new Date();
+        const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+        // Получаем все резервации для этого бота
+        const reservations = await this.prisma.mailingReservation.findMany({
+            where: {
+                botSellerId: botId,
+                adminApprovalStatus: 'APPROVED'
+            },
+            include: {
+                mailing: true,
+                botSeller: true,
+                MailingEntrances: true
+            },
+            orderBy: {
+                processedAt: 'asc'
+            }
+        });
+
+        // Вычисляем основную статистику
+        const totalMoneyEarned = await this.calculateTotalMoneyEarned(reservations);
+        const totalMailingsSold = reservations.length;
+        const totalAudienceProvided = this.calculateUniqueAudienceFromReservations(reservations);
+
+        // Вычисляем средний дневной доход - используем самую раннюю дату входа если processedAt нет
+        let firstDate = reservations[0]?.processedAt;
+        if (!firstDate && reservations.length > 0) {
+            const allEntrances = reservations.flatMap(r => r.MailingEntrances);
+            if (allEntrances.length > 0) {
+                firstDate = new Date(Math.min(...allEntrances.map(e => new Date(e.date).getTime())));
+            }
+        }
+
+        const averageDailyEarnings = this.calculateAverageDailyEarnings(
+            totalMoneyEarned,
+            firstDate,
+            now
+        );
+
+        const sellerStats = await Promise.all(
+            reservations.map(async (reservation) => ({
+                link: reservation.trackingLink || reservation.botSeller.link,
+                audienceProvided: reservation.MailingEntrances ? 
+                    new Set(reservation.MailingEntrances.map(e => e.userTelegramId)).size : 0,
+                moneyEarned: await this.calculateReservationEarnings(reservation)
+            }))
+        );
+
+        return {
+            totalMoneyEarned,
+            totalMailingsSold,
+            averageDailyEarnings,
+            totalAudienceProvided,
+            periods: {
+                day: await this.calculateSellerPeriodStatisticsByEntranceDate(reservations, dayAgo),
+                week: await this.calculateSellerPeriodStatisticsByEntranceDate(reservations, weekAgo),
+                allTime: await this.calculateSellerPeriodStatistics(reservations)
+            },
+            sellers: sellerStats
+        };
+    }
+
+    private async calculateReservationEarnings(reservation: any): Promise<number> {
+        const botSeller = reservation.botSeller;
+        
+        if (botSeller.fixedPrice) {
+            return botSeller.fixedPrice;
+        } else if (botSeller.subscriberPrice) {
+            const uniqueUsers = reservation.MailingEntrances ? 
+                new Set(reservation.MailingEntrances.map(e => e.userTelegramId)).size : 0;
+            return botSeller.subscriberPrice * uniqueUsers;
+        }
+        
+        return 0;
+    }
 
     async getUserMailingStatistics(userId: number): Promise<UserMailingStatistics> {
         const now = new Date();
@@ -241,10 +326,8 @@ export class StatsService {
                 botSeller: true,
                 mailing: true
             }
-        });
-
-        if (!reservation) {
-            throw new Error('Mailing reservation not found');
+        });        if (!reservation) {
+            throw new NotFoundException('Mailing reservation not found');
         }
 
         // Get all entrances for this reservation
@@ -279,10 +362,8 @@ export class StatsService {
                 botSeller: true,
                 mailing: true
             }
-        });
-
-        if (!reservation) {
-            throw new Error('Mailing reservation not found');
+        });        if (!reservation) {
+            throw new NotFoundException('Mailing reservation not found');
         }
 
         const botSeller = reservation.botSeller;
@@ -688,10 +769,8 @@ ${Object.entries(stats.audienceCountries)
     async approveMailingReservation(mailingReservationId: number) {
         const reservation = await this.prisma.mailingReservation.findUnique({
             where: { id: mailingReservationId }
-        });
-
-        if (!reservation) {
-            throw new Error('Mailing reservation not found');
+        });        if (!reservation) {
+            throw new NotFoundException('Mailing reservation not found');
         }
 
         // Transfer money from held amount to paid amount
