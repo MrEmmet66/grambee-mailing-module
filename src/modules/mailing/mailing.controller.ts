@@ -225,6 +225,17 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
     return await this.mailingService.getMailingReservationsBySellerId(sellerIdNum);
 }
 
+    @Get('reservations/mailing/:id')
+    async getMailingReservations(@Param('id') id: string) {
+        const mailingId = parseInt(id, 10);
+        if (isNaN(mailingId)) {
+            throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
+        }
+
+        return await this.mailingService.getMailingReservations(mailingId);
+    }
+
+
 
 
     @Get('/user/:userId')

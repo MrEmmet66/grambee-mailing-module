@@ -46,6 +46,21 @@ export class MailingService {
         });
     }
 
+    async getMailingReservations(mailingId: number) {
+        const mailing = await this.prismaService.mailingReservation.findMany({
+            where: { mailingId: mailingId, isProcessed: false, adminApprovalStatus: { not: 'FROZEN' } },
+            orderBy: {
+                date: 'asc'
+            }
+        })
+
+        if (!mailing) {
+            throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
+        }
+
+        return mailing;
+    }
+
     async getMailingOwnerTelegramId(mailingId: number) {
         const mailing = await this.prismaService.mailing.findUnique({
             where: { id: mailingId },
