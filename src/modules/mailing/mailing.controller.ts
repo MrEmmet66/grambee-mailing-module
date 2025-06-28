@@ -4,6 +4,7 @@ https://docs.nestjs.com/controllers#controllers
 
 import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete } from '@nestjs/common';
 import { MailingService } from './services/mailing.service';
+import { ReservationService } from './services/reservation.service';
 import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateMailingContentDto } from './dto/createMailing.dto';
 import { CreateMailingReservationDto } from './dto/createMailingReservation.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -16,10 +17,10 @@ import { log } from 'console';
 
 @ApiTags('mailings')
 @Controller('mailings')
-export class MailingController {
-    constructor(
+export class MailingController {    constructor(
         private readonly mailingService: MailingService,
-        private readonly mailingScheduleService: MailingScheduleService
+        private readonly mailingScheduleService: MailingScheduleService,
+        private readonly reservationService: ReservationService
     ) {}
 
     @Post()
@@ -86,9 +87,8 @@ export class MailingController {
 
     @Post('reserve')
     async reserveMailingDay(@Body() dto: CreateMailingReservationDto) {
-        console.log(dto);
         
-        return await this.mailingService.reserveMailingDay(dto);
+        return await this.reservationService.reserveMailingDay(dto);
     }
 
     @Patch('/post/:id')
@@ -147,11 +147,36 @@ export class MailingController {
     @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
     async toggleMailingStatus(@Param('id') id: string) {
         return await this.mailingService.toggleMailingStatus(parseInt(id, 10));
-    }
-
-    @Delete('reservations/:id')
-    @ApiOperation({ summary: 'Удалить резервирование рассылки по ID' })
+    }    @Delete('reservations/:id')
+    @ApiOperation({ 
+        summary: 'Отменить резервирование рассылки по ID',
+        description: 'Отменяет резервирование не менее чем за 48 часов до даты. Возвращает покупателю 70%, продавцу 25%, комиссия 5%.'
+    })
     @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
+    @ApiResponse({ 
+        status: 200, 
+        description: 'Резервирование отменено с частичным возвратом средств.',
+        schema: {
+            type: 'object',
+            properties: {
+                reservation: { type: 'object', description: 'Удаленное резервирование' },
+                refundDetails: {
+                    type: 'object',
+                    properties: {
+                        totalHeldAmount: { type: 'number', description: 'Общая удержанная сумма' },
+                        buyerRefundAmount: { type: 'number', description: 'Сумма возврата покупателю (70%)' },
+                        sellerCompensationAmount: { type: 'number', description: 'Компенсация продавцу (25%)' },
+                        cancellationFee: { type: 'number', description: 'Комиссия за отмену (5%)' },
+                        buyerTelegramId: { type: 'string', description: 'Telegram ID покупателя' },
+                        sellerTelegramId: { type: 'string', description: 'Telegram ID продавца' }
+                    }
+                }
+            }
+        }
+    })
+    @ApiResponse({ status: 404, description: 'Резервирование не найдено.' })
+    @ApiResponse({ status: 409, description: 'Резервирование нельзя отменить (менее 48 часов до даты или уже обработано).' })
+    @ApiResponse({ status: 412, description: 'Ошибка обработки возврата средств.' })
     @ApiResponse({ status: 200, description: 'Резервирование рассылки успешно удалено.' })
     @ApiResponse({ status: 404, description: 'Резервирование рассылки не найдено.' })
     async deleteMailingReservation(@Param('id') id: string) {
@@ -160,7 +185,7 @@ export class MailingController {
             throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
         }
 
-        return await this.mailingService.removeMailingReservation(reservationId);
+        return await this.reservationService.removeMailingReservation(reservationId);
     }
 
     @Get('run-test/:id')
@@ -222,7 +247,7 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
         throw new HttpException('Invalid seller ID', HttpStatus.BAD_REQUEST);
     }
     
-    return await this.mailingService.getMailingReservationsBySellerId(sellerIdNum);
+    return await this.reservationService.getMailingReservationsBySellerId(sellerIdNum);
 }
 
     @Get('reservations/mailing/:id')
@@ -232,7 +257,7 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
             throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
         }
 
-        return await this.mailingService.getMailingReservations(mailingId);
+        return await this.reservationService.getMailingReservations(mailingId);
     }
 
 
@@ -313,8 +338,53 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
             throw new HttpException('Invalid date.', HttpStatus.BAD_REQUEST);
         }
 
-        return await this.mailingService.getMailingsByDate(parsedDate, sellerId);
+        return await this.reservationService.getMailingsByDate(parsedDate, sellerId);
     }
 
-    
+    @Get('reservations/:id/can-cancel')
+    @ApiOperation({ 
+        summary: 'Проверить возможность отмены резервирования',
+        description: 'Проверяет, можно ли отменить резервирование и показывает предварительный расчет возврата средств.'
+    })
+    @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
+    @ApiResponse({ 
+        status: 200, 
+        description: 'Информация о возможности отмены резервирования.',
+        schema: {
+            type: 'object',
+            properties: {
+                canCancel: { type: 'boolean', description: 'Можно ли отменить резервирование' },
+                reason: { type: 'string', description: 'Причина, если нельзя отменить' },
+                hoursUntilReservation: { type: 'number', description: 'Часов до даты резервирования' },
+                refundPreview: {
+                    type: 'object',
+                    properties: {
+                        totalHeldAmount: { type: 'number', description: 'Общая удержанная сумма' },
+                        buyerRefundAmount: { type: 'number', description: 'Возврат покупателю (70%)' },
+                        sellerCompensationAmount: { type: 'number', description: 'Компенсация продавцу (25%)' },
+                        cancellationFee: { type: 'number', description: 'Комиссия за отмену (5%)' }
+                    }
+                }
+            }
+        }
+    })
+    async canCancelReservation(@Param('id') id: string) {
+        const reservationId = parseInt(id, 10);
+        
+        if (isNaN(reservationId)) {
+            throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
+        }
+
+        return await this.reservationService.canCancelReservation(reservationId);
+    }
+
+    @Post('track/:trackingCode')
+    async trackMailing(@Param('trackingCode') trackingCode: string, @Body() body: { userTelegramId: number }) {
+        // Validate userTelegramId
+        if (!body.userTelegramId) {
+            throw new HttpException('User Telegram ID is required', HttpStatus.BAD_REQUEST);
+        }
+
+        return await this.mailingService.trackUserEntrance(trackingCode, body.userTelegramId);
+    }
 }

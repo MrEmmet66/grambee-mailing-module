@@ -14,8 +14,7 @@ export type CreateMailingReservationDto = {
 
     sellerId: number;
 
-    date: Date;
+    dates: Date[];
 
-    selectedFilters: MailingFilters[];
     paymentType: string;
 }

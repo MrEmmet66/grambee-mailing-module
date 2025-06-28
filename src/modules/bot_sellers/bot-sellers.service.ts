@@ -543,9 +543,20 @@ export class BotSellersService {
     });
   }
 
-  async findByUserId(userId: number) {
+  async findByUserId(telegramId: string) {
+    // Сначала ищем пользователя по telegramId
+    const user = await this.prisma.user.findUnique({
+      where: { telegramId },
+      select: { id: true }
+    });
+
+    if (!user) {
+      return [];
+    }
+
+    // Затем ищем все BotSeller по userId
     return this.prisma.botSeller.findMany({
-      where: { userId },
+      where: { userId: user.id },
       include: {
         user: true,
       },
@@ -574,11 +585,57 @@ export class BotSellersService {
       return [];
     }
 
-    return this.prisma.botSeller.findMany({
+    const now = new Date();
+
+    // Получаем всех продавцов пользователя
+    const sellers = await this.prisma.botSeller.findMany({
       where: { userId: user.id },
       include: {
         user: true,
+        _count: {
+          select: {
+            mailingReservations: {
+              where: { date: { gt: now } }
+            }
+          }
+        }
+      }
+    });
+
+    // Группируем и считаем общий заработок по всем рассылкам каждого продавца
+    const earnings = await this.prisma.mailingReservation.groupBy({
+      by: ['botSellerId'],
+      where: {
+        botSellerId: { in: sellers.map(s => s.id) }
       },
+      _sum: {
+        paidAmount: true
+      }
+    });
+
+    // Формируем результат
+    const activeCounts = await this.prisma.mailingReservation.groupBy({
+      by: ['botSellerId'],
+      where: {
+        botSellerId: { in: sellers.map(s => s.id) },
+        mailing: {
+          isActive: true
+        }
+      },
+      _count: {
+        id: true
+      }
+    });
+
+    return sellers.map(seller => {
+      const earning = earnings.find(e => e.botSellerId === seller.id);
+      const active = activeCounts.find(a => a.botSellerId === seller.id);
+      return {
+        ...seller,
+        mailingReservationsCount: seller._count.mailingReservations,
+        totalEarnings: earning?._sum.paidAmount ?? 0,
+        activeMailingsCount: active?._count.id ?? 0
+      };
     });
   }
 

@@ -97,7 +97,7 @@ export class BotSellersController {
   @ApiParam({ name: 'userId', description: 'ID пользователя' })
   @ApiResponse({ status: 200, description: 'Список продавцов ботов пользователя' })
   findByUserId(@Param('userId') userId: string) {
-    return this.botSellersService.findByUserId(+userId);
+    return this.botSellersService.findByUserId(userId);
   }
 
   @Get('telegram/:telegramId')
@@ -122,6 +122,7 @@ export class BotSellersController {
   @ApiBody({ type: UpdateBotSellerDto })
   @ApiResponse({ status: 200, description: 'Данные продавца бота обновлены' })
   update(@Param('id') id: string, @Body() updateBotSellerDto: UpdateBotSellerDto) {
+    
     return this.botSellersService.update(+id, updateBotSellerDto);
   }
 

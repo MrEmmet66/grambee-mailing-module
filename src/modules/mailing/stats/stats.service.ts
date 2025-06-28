@@ -868,6 +868,42 @@ ${Object.entries(stats.audienceCountries)
         return await this.groupSellerReservationsByMonth(reservations, months);
     }
 
+    async getBotMonthlyStatistics(botId: number, months: number = 5): Promise<MonthlySellerStatistics[]> {
+        const now = new Date();
+        const startDate = new Date(now.getFullYear(), now.getMonth() - months + 1, 1);
+
+        // Get all mailing reservations for all sellers owned by this user within the period
+        const reservations = await this.prisma.mailingReservation.findMany({
+            where: {
+                botSeller: {
+                    id: botId
+                },
+                adminApprovalStatus: 'APPROVED',
+                MailingEntrances: {
+                    some: {
+                        date: {
+                            gte: startDate
+                        }
+                    }
+                }
+            },
+            include: {
+                mailing: true,
+                botSeller: true,
+                MailingEntrances: {
+                    where: {
+                        date: {
+                            gte: startDate
+                        }
+                    }
+                }
+            }
+        });
+
+        return await this.groupSellerReservationsByMonth(reservations, months);
+    }
+
+
     private async groupUserReservationsByMonth(reservations: any[], months: number): Promise<MonthlyUserStatistics[]> {
         const now = new Date();
         const monthlyData = new Map<string, any>();

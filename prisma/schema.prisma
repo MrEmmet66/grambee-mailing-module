@@ -153,7 +153,7 @@ model MailingTargetBots {
 model MailingEntrances {
   id Int @id @default(autoincrement())
   mailingReservationId Int
-  userTelegramId Int
+  userTelegramId BigInt
   date DateTime @default(now())
 
   mailingReservation MailingReservation @relation(fields: [mailingReservationId], references: [id])

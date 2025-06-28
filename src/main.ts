@@ -13,7 +13,9 @@ async function bootstrap() {
   app.useGlobalFilters(new HttpExceptionFilter());
 
   app.enableCors({
-    origin: process.env.CORS_ORIGIN || '*',
+    origin: (origin, callback) => {
+    callback(null, true); // разрешает любой origin
+  },
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
     preflightContinue: false,
   });

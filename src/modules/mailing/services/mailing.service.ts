@@ -5,7 +5,6 @@ https://docs.nestjs.com/providers#services
 import { ConflictException, forwardRef, Inject, Injectable, InternalServerErrorException, Logger, NotAcceptableException, NotFoundException, PreconditionFailedException } from '@nestjs/common';
 import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData } from '../dto/createMailing.dto';
 import { PrismaService } from 'prisma/prisma.service';
-import { CreateMailingReservationDto, MailingFilters } from '../dto/createMailingReservation.dto';
 import { TelegramService } from '../../telegram/telegram.service';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
@@ -18,12 +17,11 @@ import { MailingNotifyProps } from 'src/modules/telegram/telegram.types';
 import { mkdirSync } from 'fs';
 import { BotSeller, MailingTargetBots } from '@prisma/client';
 import { BalanceService } from '../../balance/balance.service';
+import { ReservationService } from './reservation.service';
 
 @Injectable()
 export class MailingService {
-    private readonly logger = new Logger(MailingService.name);
-
-    constructor(
+    private readonly logger = new Logger(MailingService.name);    constructor(
         private readonly prismaService: PrismaService,
         @Inject(forwardRef(() => ApplicationsService))
         private applicationsService: ApplicationsService,
@@ -32,36 +30,8 @@ export class MailingService {
         private readonly balanceService: BalanceService,
         private httpService: HttpService,
         private configService: ConfigService,
-    ) { }
-
-    getMailingsByDate(date: Date, sellerId: string) {
-        return this.prismaService.mailingReservation.findMany({
-            where: {
-                date: date,
-                botSellerId: Number(sellerId)
-            },
-            include: {
-                mailing: true
-            }
-        });
-    }
-
-    async getMailingReservations(mailingId: number) {
-        const mailing = await this.prismaService.mailingReservation.findMany({
-            where: { mailingId: mailingId, isProcessed: false, adminApprovalStatus: { not: 'FROZEN' } },
-            orderBy: {
-                date: 'asc'
-            }
-        })
-
-        if (!mailing) {
-            throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
-        }
-
-        return mailing;
-    }
-
-    async getMailingOwnerTelegramId(mailingId: number) {
+        private readonly reservationService: ReservationService,
+    ) { }    async getMailingOwnerTelegramId(mailingId: number) {
         const mailing = await this.prismaService.mailing.findUnique({
             where: { id: mailingId },
             include: { user: true }
@@ -100,86 +70,7 @@ export class MailingService {
         return await this.prismaService.mailing.delete({
             where: { id: mailingId }
         });
-    }
-
-    async removeMailingReservation(reservationId: number) {
-        const reservation = await this.prismaService.mailingReservation.findUnique({
-            where: { id: reservationId },
-            include: {
-                mailing: true
-            }
-        });
-
-        if (!reservation) {
-            throw new NotFoundException(`Reservation with ID ${reservationId} not found`);
-        }
-
-        // Check if the reservation is already processed
-        if (reservation.isProcessed) {
-            throw new ConflictException(`Reservation with ID ${reservationId} is already processed`);
-        }
-
-        if (reservation.adminApprovalStatus === 'FROZEN') {
-            throw new ConflictException(`Reservation with ID ${reservationId} is frozen and cannot be deleted`);
-        }
-
-        if (reservation.mailing.isActive) {
-            throw new ConflictException(`Mailing with ID ${reservation.mailingId} is active and cannot be deleted`);
-        }
-
-        // Delete the reservation
-        return await this.prismaService.mailingReservation.delete({
-            where: { id: reservationId }
-        });
-    }
-
-    async getMailingReservationsBySellerId(sellerId: number) {
-        return await this.prismaService.mailingReservation.findMany({
-            where: {
-                botSellerId: sellerId,
-                isProcessed: false,
-                adminApprovalStatus: { not: 'FROZEN' },
-                date: {
-                    gte: new Date()
-                }
-
-            },
-            include: {
-                mailing: true,
-                botSeller: true
-            },
-            orderBy: {
-                date: 'asc'
-            }
-        });
-    }
-
-    async checkAndDeactivateMailing(mailingId: number) {
-        const remainingReservations = await this.prismaService.mailingReservation.count({
-            where: {
-                mailingId: mailingId,
-                isProcessed: false,
-                adminApprovalStatus: 'APPROVED'
-            }
-        });
-
-        if (remainingReservations === 0) {
-            const updatedMailing = await this.prismaService.mailing.update({
-                where: { id: mailingId },
-                data: {
-                    isActive: false,
-                    status: 'COMPLETED'
-                }
-            });
-
-            this.logger.log(`Mailing ${mailingId} completed and deactivated`);
-            return updatedMailing;
-        }
-
-        return null;
-    }
-
-    async updateMailingContent(mailingId: number, updateData: UpdateMailingContentFormData) {
+    }    async updateMailingContent(mailingId: number, updateData: UpdateMailingContentFormData) {
         return await this.prismaService.mailing.update({
             where: { id: mailingId },
             data: {
@@ -191,6 +82,129 @@ export class MailingService {
         });
 
     }
+
+    async trackUserEntrance(trackingCode: string, userTelegramId: number) {
+    this.logger.log(`Tracking user entrance for code: ${trackingCode}, user: ${userTelegramId}`);
+
+    // Найти резервацию по трекинговому коду
+    const mailingReservation = await this.prismaService.mailingReservation.findFirst({
+        where: {
+            trackingLink: {
+                contains: trackingCode
+            }
+        },
+        include: {
+            mailing: true,
+            botSeller: {
+                include: {
+                    user: true
+                }
+            }
+        }
+    });
+
+    if (!mailingReservation) {
+        throw new NotFoundException(`Tracking link with code ${trackingCode} not found`);
+    }
+
+    // Проверить, что переход еще не был засчитан для этого пользователя
+    const existingEntrance = await this.prismaService.mailingEntrances.findFirst({
+        where: {
+            mailingReservationId: mailingReservation.id,
+            userTelegramId: userTelegramId
+        }
+    });
+
+    if (existingEntrance) {
+        this.logger.warn(`User ${userTelegramId} already tracked for reservation ${mailingReservation.id}`);
+        // Возвращаем текущую статистику, но не засчитываем повторный переход
+        const totalEntrances = await this.prismaService.mailingEntrances.count({
+            where: {
+                mailingReservationId: mailingReservation.id
+            }
+        });
+
+        return {
+            success: true,
+            mailingReservationId: mailingReservation.id,
+            userTelegramId: userTelegramId,
+            totalEntrances: totalEntrances,
+            peopleInvited: mailingReservation.peopleInvited,
+            alreadyTracked: true
+        };
+    }
+
+    // Создать запись о переходе
+    await this.prismaService.mailingEntrances.create({
+        data: {
+            mailingReservationId: mailingReservation.id,
+            userTelegramId: userTelegramId
+        }
+    });
+
+    // Увеличить счетчик приглашенных людей в резервации
+    const updatedReservation = await this.prismaService.mailingReservation.update({
+        where: {
+            id: mailingReservation.id
+        },
+        data: {
+            peopleInvited: {
+                increment: 1
+            }
+        }
+    });
+
+    // Найти или создать запись в MailingTargetBots для обновления статистики
+    let mailingTargetBot = await this.prismaService.mailingTargetBots.findFirst({
+        where: {
+            botSellerId: mailingReservation.botSellerId,
+            mailingId: mailingReservation.mailingId
+        }
+    });
+
+    if (!mailingTargetBot) {
+        // Создать запись если не существует
+        mailingTargetBot = await this.prismaService.mailingTargetBots.create({
+            data: {
+                botSellerId: mailingReservation.botSellerId,
+                mailingId: mailingReservation.mailingId,
+                link: mailingReservation.trackingLink || mailingReservation.botSeller.link,
+                peopleInvited: 1,
+                paymentType: 'fixed' // или определить на основе данных бота
+            }
+        });
+    } else {
+        // Обновить существующую запись
+        mailingTargetBot = await this.prismaService.mailingTargetBots.update({
+            where: {
+                id: mailingTargetBot.id
+            },
+            data: {
+                peopleInvited: {
+                    increment: 1
+                }
+            }
+        });
+    }
+
+    // Получить общее количество переходов для этой резервации
+    const totalEntrances = await this.prismaService.mailingEntrances.count({
+        where: {
+            mailingReservationId: mailingReservation.id
+        }
+    });
+
+    this.logger.log(`Successfully tracked entrance for user ${userTelegramId}, reservation ${mailingReservation.id}. Total entrances: ${totalEntrances}`);
+
+    return {
+        success: true,
+        mailingReservationId: mailingReservation.id,
+        userTelegramId: userTelegramId,
+        totalEntrances: totalEntrances,
+        peopleInvited: updatedReservation.peopleInvited,
+        alreadyTracked: false
+    };
+}
 
     async getMailingById(mailingId: number) {
         const mailing = await this.prismaService.mailing.findUnique({
@@ -349,176 +363,15 @@ export class MailingService {
 
         if (mailing.isActive) {
             throw new ConflictException('Mailing is already active');
-        }
-
-        return await this.prismaService.mailing.update({
+        }        return await this.prismaService.mailing.update({
             where: {
                 id: mailingId
             },
             data: {
                 isActive: !mailing.isActive
             }
-        })
-    }
-
-    async getMailingReservationByLink(link: string) {
-        return await this.prismaService.mailingReservation.findFirst({
-            where: {
-                trackingLink: link,
-                isProcessed: true,
-                adminApprovalStatus: { not: 'FROZEN' }
-            },
-            include: {
-                mailing: true,
-                botSeller: true
-            }
         });
-    }
-
-    async reserveMailingDay(dto: CreateMailingReservationDto) {
-        const jsonSelectedFilters = JSON.stringify(dto.selectedFilters);
-
-        const existingReservation = await this.prismaService.mailingReservation.findFirst({
-            where: {
-                date: dto.date,
-                botSellerId: dto.sellerId,
-            }
-        });
-
-        if (existingReservation) {
-            throw new ConflictException('Mailing day already reserved');
-        }
-
-        const botSeller = await this.prismaService.botSeller.findUnique({
-            where: { id: dto.sellerId }
-        })
-
-        if (!botSeller) {
-            throw new NotFoundException('Bot seller not found');
-        }
-
-        const mailing = await this.getMailingById(dto.mailingId);
-        if (!mailing) {
-            throw new NotFoundException('Mailing not found');
-        }
-
-        // Получаем комиссии сервиса из конфига
-        const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
-        const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);
-
-        let heldAmount = 0;
-        let baseAmount = 0;
-        let serviceCommission = 0;
-
-        if (dto.paymentType === 'fixed') {
-            // Для фиксированной оплаты берем fixedPrice продавца
-            baseAmount = botSeller.fixedPrice || 0;
-            serviceCommission = serviceCommissionFixed;
-            heldAmount = baseAmount + serviceCommission;
-        } else if (dto.paymentType === 'subscriber') {
-            if (mailing.botToken === null) {
-                throw new ConflictException('Bot token is required for per subscriber payment type');
-            }
-
-            if (mailing.isChannel && mailing.channelId !== null) {
-                const channelInfo = await this.telegramService.getChatInfo(mailing.channelId, mailing.botToken);
-                this.logger.log(`Channel info: ${JSON.stringify(channelInfo)}`);
-
-                if (!channelInfo || !channelInfo.ok) {
-                    throw new NotFoundException(`Channel with ID ${mailing.channelId} not found or bot token is invalid`);
-                }
-
-                if (channelInfo.result.username) {
-                    throw new NotAcceptableException(`Per subscriber payment type is not supported for public channels`);
-                }
-            }
-
-            // Для оплаты за подписчика
-            const maxUsers = botSeller.botLiveAudience || botSeller.channelAudience || 0;
-            if (maxUsers <= 0) {
-                // Если нет данных об аудитории, используем фиксированную оплату
-                baseAmount = botSeller.fixedPrice || 0;
-                serviceCommission = serviceCommissionFixed;
-            } else {
-                const pricePerUser = botSeller.subscriberPrice || 0;
-                if (baseAmount <= 0 || maxUsers <= 0) {
-                    baseAmount = botSeller.fixedPrice || 0;
-                    serviceCommission = serviceCommissionFixed;
-                }
-                else {
-                    baseAmount = pricePerUser * maxUsers;
-                    serviceCommission = serviceCommissionPerUser * maxUsers;
-                }
-
-            }
-            heldAmount = baseAmount + serviceCommission;
-        } else {
-            // Fallback к фиксированной оплате
-            baseAmount = botSeller.fixedPrice || 0;
-            serviceCommission = serviceCommissionFixed;
-            heldAmount = baseAmount + serviceCommission;
-        }
-
-        // Получаем пользователя из мейлинга для холда баланса
-        const user = await this.prismaService.user.findUnique({
-            where: { id: mailing.userId }
-        });
-
-        if (!user) {
-            throw new NotFoundException('User not found');
-        }
-
-        // Попытка холда баланса
-        try {
-            this.logger.log(`Holding balance for mailing reservation: ${heldAmount}`);
-            await this.balanceService.holdBalance(user.telegramId.toString(), {
-                amount: Number((heldAmount / 100).toFixed(2)),
-                description: `Удержание баланса за резервирование рассылки #${dto.mailingId} для канала ${botSeller.link}. Базовая стоимость: ${baseAmount}, комиссия сервиса: ${serviceCommission}.`
-            });
-        } catch (error) {
-            this.logger.error(`Failed to hold balance for mailing reservation: ${error.message}`);
-            throw new PreconditionFailedException(`Не удалось зарезервировать средства: ${error.message}`);
-        }
-
-        let trackingLink = await this.telegramService.generateTrackingLink(mailing.isChannel, mailing.channelId, dto.mailingId, dto.sellerId, botSeller.link, mailing.botToken || botSeller.botToken);
-
-        // Create the reservation
-        const reservation = await this.prismaService.mailingReservation.create({
-            data: {
-                mailingId: Number(dto.mailingId),
-                botSellerId: Number(dto.sellerId),
-                date: dto.date,
-                selectedFilters: jsonSelectedFilters,
-                heldAmount: parseFloat(heldAmount.toString()),
-                trackingLink: trackingLink
-            }
-        });
-
-        // Check if this is the first reservation for this bot-mailing combination
-        const existingTargetBot = await this.prismaService.mailingTargetBots.findFirst({
-            where: {
-                botSellerId: dto.sellerId,
-                mailingId: dto.mailingId,
-                paymentType: dto.paymentType || 'fixed'
-            }
-        });
-
-        if (!existingTargetBot) {
-            // Create MailingTargetBots record with the tracking link
-            await this.prismaService.mailingTargetBots.create({
-                data: {
-                    botSellerId: dto.sellerId,
-                    mailingId: dto.mailingId,
-                    link: trackingLink,
-                    paymentType: dto.paymentType || 'fixed',
-                }
-            });
-        }
-
-        return { reservation, seller: botSeller };
-    }
-
-    async processMailing(reservation) {
+    }    async processMailing(reservation) {
         const { selectedFilters } = reservation;
 
         const mailing = await this.prismaService.mailing.findUnique({
@@ -586,7 +439,7 @@ export class MailingService {
         // Update mailing statistics
         await this.updateMailingStatistics(botSeller, mailing);
 
-        const completedMailing = await this.checkAndDeactivateMailing(mailing.id);
+        const completedMailing = await this.reservationService.checkAndDeactivateMailing(mailing.id);
 
         const props: MailingNotifyProps = {
             isChannel: botSeller.isChannel,

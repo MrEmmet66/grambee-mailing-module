@@ -41,6 +41,14 @@ export class StatsController {
         return await this.statsService.getSellerMonthlyStatistics(userId, months);
     }
 
+    @Get('bot/:botId/mailings/monthly')
+    async getBotMonthlyStatistics(
+        @Param('botId', ParseIntPipe) botId: number,
+        @Query('months', ParseIntPipe) months: number
+    ): Promise<MonthlySellerStatistics[]> {
+        return await this.statsService.getBotMonthlyStatistics(botId, months);
+    }
+
     @Get('reservation/:reservationId/bot')
     async getBotStatistics(@Param('reservationId', ParseIntPipe) reservationId: number): Promise<{ raw: BotStatistics; formatted: string }> {
         const stats = await this.statsService.getBotStatistics(reservationId);

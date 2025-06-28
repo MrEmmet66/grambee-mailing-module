@@ -2,11 +2,11 @@ import { Controller, Post, Param, Body, Logger, LoggerService } from '@nestjs/co
 import { BotSellersService } from '../bot_sellers';
 import { TelegramService } from './telegram.service';
 import { link } from 'fs';
-import { MailingService } from '../mailing/services/mailing.service';
+import { ReservationService } from '../mailing/services/reservation.service';
 
 @Controller('telegram')
 export class TelegramController {
-    constructor(private readonly botSellerService: BotSellersService, private readonly telegramService: TelegramService, private readonly mailingService: MailingService) {}
+    constructor(private readonly botSellerService: BotSellersService, private readonly telegramService: TelegramService, private readonly reservationService: ReservationService) {}
     private readonly logger = new Logger(TelegramController.name);
 
     @Post('webhook')
@@ -20,7 +20,7 @@ export class TelegramController {
 
             this.logger.log(`Chat ID: ${chatId}, User ID: ${userId}, Invite Link: ${inviteLink}`, 'TelegramController');
             try {
-                const reservation = await this.mailingService.getMailingReservationByLink(inviteLink);
+                const reservation = await this.reservationService.getMailingReservationByLink(inviteLink);
                 // Approve the chat join request
                 await this.telegramService.approveChatJoinRequest(chatId, userId, reservation?.mailing.botToken || '');
                 await this.botSellerService.handleMailingEntrance(inviteLink, userId);

@@ -83,6 +83,6 @@ export class BalanceService {
   }
 
   async holdBalance(telegramId: string, dto: BalanceOperationDto): Promise<GetBalanceResponseDto> {
-    return this.makeBalanceRequest(`api/v1/balance/${telegramId}/hold`, dto);
+    return this.makeBalanceRequest(`/api/v1/balance/${telegramId}/hold`, dto);
   }
 } 
