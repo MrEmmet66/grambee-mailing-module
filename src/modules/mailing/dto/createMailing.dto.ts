@@ -14,19 +14,12 @@ export class CreateMailingDto {
     })
     userId: number;
 
-    @ApiProperty({ 
-        description: 'ID канала, если рассылка для канала (isChannel = true)',
-        example: '-1001234567890',
-        required: false
-    })
-    channelId?: string;
-
     @ApiProperty({
         description: 'Ссылка на бота, если рассылка для бота (isChannel = false)',
         example: 'https://t.me/example_bot',
         required: false
     })
-    botLink?: string;
+    link?: string;
 
     @ApiProperty({
         description: 'Флаг, указывающий на тип рассылки (канал или бот)',
@@ -69,9 +62,8 @@ export class CreateMailingDto {
 export interface CreateMailingFormData {
     botToken?: string;
     userId: number;
-    channelId?: string;
-    botLink?: string;
-    isChannel?: boolean;
+    link?: string;
+    isChannel?: string;
     content: string;
     mediaType?: string;
     media?: Express.Multer.File;

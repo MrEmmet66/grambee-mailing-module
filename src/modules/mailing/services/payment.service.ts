@@ -1,12 +1,17 @@
-import { Injectable } from "@nestjs/common";
+import { forwardRef, Inject, Injectable } from "@nestjs/common";
 import { PrismaService } from "prisma/prisma.service";
 import { BalanceService } from "src/modules/balance/balance.service";
 import { MailingTargetBots } from '@prisma/client';
 import { ConfigService } from "@nestjs/config";
+import { MailingService } from "./mailing.service";
 
 @Injectable()
 export class MailingPaymentService {
-    constructor(private readonly prisma: PrismaService, private readonly balanceService: BalanceService, private readonly configService: ConfigService) { }
+    constructor(private readonly prisma: PrismaService,
+        private readonly balanceService: BalanceService, 
+        private readonly configService: ConfigService,
+        @Inject(forwardRef(() => MailingService)) // Use forwardRef to avoid circular dependency
+        private readonly mailingService: MailingService) { }
 
 
     async approveMailingPayment(mailingReservationId: number) {
@@ -30,7 +35,12 @@ export class MailingPaymentService {
             throw new Error(`Mailing reservation with ID ${mailingReservationId} already has an admin approval status`);
         }
 
-        const entranceCount = reservation.peopleInvited || 0;
+        if (reservation.mailing.isChannel === true) {
+            await this.mailingService.updateChannelViews(reservation);
+        }
+        
+
+        const entranceCount = reservation.viewCount || 0;
 
         const targetBot = await this.prisma.mailingTargetBots.findFirst({
             where: {
@@ -38,6 +48,9 @@ export class MailingPaymentService {
                 botSellerId: reservation.botSellerId
             }
         });
+        
+        const serviceDefaultSubscriberPrice = this.configService.get<number>('SERVICE_DEFAULT_SUBSCRIBER_PRICE', 0.0005);
+        const serviceChannelDefaultSubscriberPrice = this.configService.get<number>('SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE', 0.0002);
 
         let sellerAmount = 0;
         let serviceCommission = 0;
@@ -45,14 +58,15 @@ export class MailingPaymentService {
 
         if (targetBot?.paymentType === 'fixed') {
             // Фиксированная оплата
-            sellerAmount = reservation.botSeller.fixedPrice || 0;
-            serviceCommission = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+            sellerAmount = Number(reservation.botSeller.fixedPrice) || 0;
+            serviceCommission = Number(this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25)) || 0;
             totalPayment = sellerAmount + serviceCommission;
 
-        } else if (targetBot?.paymentType === 'subscriber') {
+        } else if (targetBot?.paymentType === 'per_subscriber') {
             // Оплата за подписчика - считаем по факту переходов
-            const pricePerSubscriber = reservation.botSeller.subscriberPrice || 0;
-            const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);
+
+            const pricePerSubscriber = reservation.mailing.isChannel ? Number(serviceChannelDefaultSubscriberPrice) : Number(serviceDefaultSubscriberPrice);
+            const serviceCommissionPerUser = Number(this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.00005)) || 0;
 
             sellerAmount = pricePerSubscriber * entranceCount;
             serviceCommission = serviceCommissionPerUser * entranceCount;
@@ -60,8 +74,8 @@ export class MailingPaymentService {
 
         } else {
             // Fallback
-            sellerAmount = reservation.botSeller.fixedPrice || 0;
-            serviceCommission = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+            sellerAmount = Number(reservation.botSeller.fixedPrice) || 0;
+            serviceCommission = Number(this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25)) || 0;
             totalPayment = sellerAmount + serviceCommission;
         }
 
@@ -80,6 +94,8 @@ export class MailingPaymentService {
             if (totalPayment > heldAmount) {
                 // Нужно доплатить разницу из основного баланса
                 const additionalAmount = totalPayment - heldAmount;
+                console.log(`🔍 Insufficient hold amount. Total payment: ${totalPayment}, Held amount: ${heldAmount}, Additional amount needed: ${additionalAmount}`);
+                
 
                 if ((buyerBalance.availableBalance || 0) < additionalAmount) {
                     throw new Error(`Insufficient balance. Required: ${additionalAmount}, Available: ${buyerBalance.availableBalance || 0}`);

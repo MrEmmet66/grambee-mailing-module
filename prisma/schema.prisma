@@ -53,7 +53,6 @@ enum BotCategories {
 model BotSeller {
   id Int @id @default(autoincrement())
   userId Int
-  apiKey String @unique
   botToken String @unique
   usersData Json
   description String?
@@ -69,6 +68,7 @@ model BotSeller {
   statisticsFilePath String?               // путь к файлу статистики бота
 
   // Bot statistics
+  totalBotAudience Int? @default(0) // общая аудитория бота
   botLiveAudience Int? @default(0)         //  живые люди
   botMonthlyActiveUsers Int? @default(0)   // мау
 
@@ -93,21 +93,19 @@ model MailingReservation {
   mailingId Int
   botSellerId Int
   date DateTime
-  selectedFilters Json
   heldAmount Float @default(0) // Сумма, которая удерживается для рассылки
   paidAmount Float @default(0) // Сумма, которая уже оплачена
   trackingLink String?
-  peopleInvited Int @default(0) // Кол-во людей, которых пригласили на канал
   isProcessed Boolean @default(false) // Флаг, что рассылка обработана
   processedAt DateTime? // Дата, когда рассылка была обработана
   adminApprovalStatus String @default("PENDING") // Статус одобрения админом
+  forwardedMessageId String? // ID сообщения, которое было переслано в канал
+  viewCount Int @default(0) // Количество просмотров рассылки
 
 
 
   mailing Mailing @relation(fields: [mailingId], references: [id])
   botSeller BotSeller @relation(fields: [botSellerId], references: [id])
-
-  MailingEntrances MailingEntrances[]
 }
 
 model Mailing {
@@ -118,7 +116,7 @@ model Mailing {
   channelId String? // ID канала, если isChannel = true
   isChannel Boolean @default(false)
 
-  botLink String? // Ссылка на бота
+  link String // Ссылка на бота
   
 
   status MailingStatus @default(PENDING)
@@ -141,22 +139,11 @@ model MailingTargetBots {
   id Int @id @default(autoincrement())
   botSellerId Int
   mailingId Int
-  link String
-  peopleInvited Int? @default(0)
   paymentType String @default("fixed")
 
   botSeller BotSeller @relation(fields: [botSellerId], references: [id])
   mailing Mailing @relation(fields: [mailingId], references: [id])
 
-}
-
-model MailingEntrances {
-  id Int @id @default(autoincrement())
-  mailingReservationId Int
-  userTelegramId BigInt
-  date DateTime @default(now())
-
-  mailingReservation MailingReservation @relation(fields: [mailingReservationId], references: [id])
 }
 
 

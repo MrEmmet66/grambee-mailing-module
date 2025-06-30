@@ -17,10 +17,27 @@ import { forwardRef } from '@nestjs/common';
 import { MailingPaymentService } from './services/payment.service';
 import { BalanceModule } from '../balance/balance.module';
 import { ReservationService } from './services/reservation.service';
+import { ProcessorService } from './services/processor.service';
+import { BullModule } from '@nestjs/bull';
+import { MailingQueueWorker } from './services/mailing-queue.processor';
+import { ConfigService } from '@nestjs/config';
+import { MailingCheckoutService } from './services/mailingcheckout.service';
 
 @Module({
     imports: [
         forwardRef(() => TelegramModule),
+        BullModule.registerQueueAsync({
+            name: 'mailing',
+            useFactory: async (configService: ConfigService) => ({
+                limiter: { max: 25, duration: 1000 },
+                redis: {
+                    host: configService.get('REDIS_HOST', 'localhost'),
+                    port: parseInt(configService.get('REDIS_PORT', '6379'), 10),
+                    password: configService.get('REDIS_PASSWORD', undefined),
+                },
+            }),
+            inject: [ConfigService],
+        }),
         BalanceModule,
         ConfigModule,
         HttpModule,
@@ -36,7 +53,8 @@ import { ReservationService } from './services/reservation.service';
             }),
         }),
     ],
-    controllers: [MailingController],    providers: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService],
-    exports: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService],
+    controllers: [MailingController],
+    providers: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService, ProcessorService, MailingQueueWorker, MailingCheckoutService],
+    exports: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService, ProcessorService, MailingQueueWorker, MailingCheckoutService],
 })
 export class MailingModule {}

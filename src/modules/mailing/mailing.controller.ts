@@ -67,18 +67,18 @@ export class MailingController {    constructor(
 
         // Convert userId from string to integer if needed
         const userId = typeof dto.userId === 'string' ? parseInt(dto.userId, 10) : dto.userId;
+        const isChannel = dto.isChannel === 'true'
         
         // Prepare data for the service
-        const mailingData: CreateMailingFormData = {
+        const mailingData: CreateMailingDto = {
             botToken: dto.botToken,
             userId: userId,
             content: dto.content,
             mediaType: dto.mediaType || 'photo', // Default to photo if not specified
             buttonContent: dto.buttonContent,
             media: file,
-            channelId: dto.channelId, // Optional field
-            botLink: dto.botLink, // Optional field
-            isChannel: dto.isChannel || false // Optional field
+            link: dto.link, // Optional field
+            isChannel: isChannel
         };
         
         // Call the service to create the mailing
@@ -376,15 +376,5 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
         }
 
         return await this.reservationService.canCancelReservation(reservationId);
-    }
-
-    @Post('track/:trackingCode')
-    async trackMailing(@Param('trackingCode') trackingCode: string, @Body() body: { userTelegramId: number }) {
-        // Validate userTelegramId
-        if (!body.userTelegramId) {
-            throw new HttpException('User Telegram ID is required', HttpStatus.BAD_REQUEST);
-        }
-
-        return await this.mailingService.trackUserEntrance(trackingCode, body.userTelegramId);
     }
 }

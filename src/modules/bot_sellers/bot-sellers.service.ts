@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, forwardRef, Inject, Logger } from '@nestjs/common';
-import { CreateBotSellerDto, UpdateBotSellerDto } from './dto';
+import { CreateBotSellerDto, CreateBotSellerFormData, UpdateBotSellerDto } from './dto';
 import { PrismaService } from 'prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import * as crypto from 'crypto';
@@ -10,6 +10,7 @@ import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
 import { BotSeller, MailingTargetBots } from '@prisma/client';
 import { ApplicationsService } from '../telegram/applications.service';
+import { log } from 'console';
 
 @Injectable()
 export class BotSellersService {
@@ -55,7 +56,7 @@ export class BotSellersService {
     return botTokenRegex.test(token);
   }
 
-  private async validateStatisticsFile(filePath: string): Promise<boolean> {
+  private async validateStatisticsFile(filePath: string): Promise<number> {
     return new Promise((resolve, reject) => {
       const fileStream = fs.createReadStream(filePath);
       const rl = readline.createInterface({
@@ -65,33 +66,37 @@ export class BotSellersService {
 
       let lineNumber = 0;
       let isValid = true;
+      let userCount = 0;
 
       rl.on('line', (line) => {
         lineNumber++;
         const trimmedLine = line.trim();
-
         if (!trimmedLine) return;
-
+        userCount++;
+        console.log(`Processing line ${lineNumber}: "${trimmedLine}"`);
+        
         const telegramId = trimmedLine.includes(':') ? trimmedLine.split(':')[0] : trimmedLine;
-
         if (!/^\d+$/.test(telegramId)) {
           isValid = false;
           rl.close();
           reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
           return;
         }
-
         if (telegramId.length < 9 || telegramId.length > 10) {
           isValid = false;
           rl.close();
           reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
           return;
         }
+
+        console.log(`Valid Telegram ID at line ${lineNumber}: "${telegramId}"`);
+        
       });
 
       rl.on('close', () => {
         if (isValid) {
-          resolve(true);
+          resolve(userCount);
+          this.logger.log(`Statistics file processed: ${filePath}, total users: ${userCount}`);
         }
       });
 
@@ -199,6 +204,10 @@ export class BotSellersService {
       if (channelInfoResponse.data && channelInfoResponse.data.ok) {
         this.logger.log('Channel Information:');
         this.logger.log(JSON.stringify(channelInfoResponse.data.result, null, 2));
+        if(channelInfoResponse.data.result.has_protected_content === true) {
+          throw new BadRequestException('В канале отключена пересылка сообщений. Пожалуйста, отключите эту опцию чтобы пользоваться сервисом.');
+        }
+
 
         await this.validateBotAdminRights(botToken, channelId);
       } else {
@@ -211,6 +220,8 @@ export class BotSellersService {
       throw new BadRequestException('Failed to verify channel ID: ' + error.message);
     }
   }
+
+
 
   private async validateBotAdminRights(botToken: string, channelId: string): Promise<void> {
     try {
@@ -260,13 +271,13 @@ export class BotSellersService {
     }
   }
 
-  private async handleStatisticsFile(statisticsFile?: Express.Multer.File): Promise<string | null> {
+  private async handleStatisticsFile(statisticsFile?: Express.Multer.File): Promise<{ path: string, userCount: number } | null> {
     if (!statisticsFile) return null;
 
     const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
     try {
-      await this.validateStatisticsFile(filePath);
-      return `/uploads/bot_users/${statisticsFile.filename}`;
+      const userCount = await this.validateStatisticsFile(filePath);
+      return { path: `/uploads/bot_users/${statisticsFile.filename}`, userCount };
     } catch (error) {
       try {
         fs.unlinkSync(filePath);
@@ -277,12 +288,14 @@ export class BotSellersService {
     }
   }
 
-  async create(createBotSellerDto: CreateBotSellerDto, statisticsFile?: Express.Multer.File) {
+  async create(createBotSellerDto: CreateBotSellerFormData, statisticsFile?: Express.Multer.File) {
     let userId: number;
 
     // Debug log to see the incoming DTO
     this.logger.debug(`Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`);
     this.logger.debug(`isChannel type: ${typeof createBotSellerDto.isChannel}, value: ${createBotSellerDto.isChannel}`);
+
+    const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
 
 
     if (createBotSellerDto.userId) {
@@ -313,7 +326,7 @@ export class BotSellersService {
     if (existingBot) {
       throw new BadRequestException('A bot with this token or channel ID already exists');
     }
-
+    
 
     if (!this.validateBotToken(createBotSellerDto.botToken)) {
       throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
@@ -330,14 +343,16 @@ export class BotSellersService {
       if (!createBotSellerDto.channelId) {
         throw new BadRequestException('Channel ID is required when isChannel is true');
       }
-      await this.validateChannelAccess(createBotSellerDto.botToken, createBotSellerDto.channelId);
+      const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
+      await this.validateChannelAccess(mainBotToken, createBotSellerDto.channelId);
     }
 
     const mau = await this.calculateMAU(createBotSellerDto.botToken);
     this.logger.log(`[MAU] Bot ${createBotSellerDto.botToken.slice(0, 10)} has ${mau} monthly active users`);
 
     const apiKey = this.generateApiKey();
-    const statisticsFilePath = await this.handleStatisticsFile(statisticsFile);
+    const statistics = await this.handleStatisticsFile(statisticsFile);
+    this.logger.log(`Statistics file processed: ${JSON.stringify(statistics)}`);
 
     // Create a new object with all properties from the DTO, excluding unwanted fields
     const botSellerData = {
@@ -345,16 +360,21 @@ export class BotSellersService {
       userId,
       apiKey,
       acceptStatus: 'PENDING',
-      statisticsFilePath,
+      statisticsFilePath: statistics?.path || null, // Use the path from the statistics file if available
       usersData: createBotSellerDto.usersData || {},
+      totalBotAudience: statistics?.userCount || 0,
+      
       isChannel: isChannel, // Make sure to use the processed boolean value
       // Only set channelId if isChannel is true and channelId is provided
       channelId: isChannel ? createBotSellerDto.channelId : null,
     };
 
-    // Remove telegramId from data sent to Prisma as it's not in the BotSeller model
+    // Remove telegramId and statisticsFile from data sent to Prisma as they're not in the BotSeller model
     if ('telegramId' in botSellerData) {
       delete botSellerData.telegramId;
+    }
+    if ('statisticsFile' in botSellerData) {
+      delete botSellerData.statisticsFile;
     }
 
     this.logger.debug(`Final bot seller data: ${JSON.stringify(botSellerData)}`);
@@ -372,140 +392,6 @@ export class BotSellersService {
     return botSeller;
   }
 
-  async handleMailingEntrance(link: string, userId: number) {
-    this.logger.log(`Handling mailing entrance for user ${userId} with link: ${link}`);
-
-    let mailingReservation;
-
-    // Способ 1: Если это start параметр для бота (m{mailingId}_s{sellerId}_{timestamp})
-    if (link.includes('?start=')) {
-      const startParam = link.split('?start=')[1];
-
-      if (startParam && startParam.startsWith('m')) {
-        const match = startParam.match(/^m(\d+)_s(\d+)_/);
-
-        if (match) {
-          const mailingId = parseInt(match[1]);
-          const sellerId = parseInt(match[2]);
-
-          // Найти активную резервацию для этой рассылки и продавца
-          mailingReservation = await this.prisma.mailingReservation.findFirst({
-            where: {
-              mailingId: mailingId,
-              botSellerId: sellerId,
-              isProcessed: true, // Только обработанные резервации
-              adminApprovalStatus: { not: 'FROZEN' } // Исключить замороженные
-            }
-          });
-
-          this.logger.log(`Found reservation by start param: mailingId=${mailingId}, sellerId=${sellerId}`);
-        }
-      }
-    }
-    // Способ 2: Если это прямая ссылка (invite link)
-    else {
-      mailingReservation = await this.prisma.mailingReservation.findFirst({
-        where: {
-          trackingLink: link,
-          isProcessed: true,
-          adminApprovalStatus: { not: 'FROZEN' }
-        }
-      });
-
-      this.logger.log(`Searching reservation by direct link: ${link}`);
-    }
-
-    if (!mailingReservation) {
-      this.logger.warn(`No active mailing reservation found for link: ${link}`);
-      return null;
-    }
-
-    const now = new Date();
-    const fourHoursAgo = new Date(now.getTime() - 4 * 60 * 60 * 1000); // 4 часа назад
-
-    // Найти последний переход этого пользователя по этой резервации
-    const lastEntrance = await this.prisma.mailingEntrances.findFirst({
-      where: {
-        userTelegramId: userId,
-        mailingReservationId: mailingReservation.id
-      },
-      orderBy: {
-        date: 'desc'
-      }
-    });
-
-    // Проверить, прошло ли 4 часа с последнего перехода
-    if (lastEntrance && lastEntrance.date > fourHoursAgo) {
-      const timeLeft = Math.ceil((lastEntrance.date.getTime() + 4 * 60 * 60 * 1000 - now.getTime()) / (1000 * 60));
-      this.logger.log(`User ${userId} is in freeze period for reservation ${mailingReservation.id}. Time left: ${timeLeft} minutes`);
-
-      return {
-        success: false,
-        message: `Заморозка действует еще ${timeLeft} минут`,
-        timeLeft: timeLeft,
-        lastEntrance: lastEntrance,
-        canCreateNew: false
-      };
-    }
-
-    // Определить, первый ли это переход пользователя
-    const isFirstEntrance = !lastEntrance;
-
-    // Создать новую запись о переходе
-    const entrance = await this.prisma.mailingEntrances.create({
-      data: {
-        userTelegramId: userId,
-        mailingReservationId: mailingReservation.id,
-      }
-    });
-
-    // Обновить счетчик peopleInvited ТОЛЬКО если это первый переход
-    if (isFirstEntrance) {
-      await this.prisma.mailingReservation.update({
-        where: { id: mailingReservation.id },
-        data: {
-          peopleInvited: {
-            increment: 1
-          }
-        }
-      });
-
-      this.logger.log(`✅ FIRST entrance for user ${userId} to reservation ${mailingReservation.id}. Updated peopleInvited counter.`);
-    } else {
-      this.logger.log(`✅ REPEAT entrance for user ${userId} to reservation ${mailingReservation.id} after 4+ hours. No counter update.`);
-    }
-
-    // Получить общую статистику
-    const totalEntrances = await this.prisma.mailingEntrances.count({
-      where: {
-        mailingReservationId: mailingReservation.id
-      }
-    });
-
-    const uniqueUsers = await this.prisma.mailingEntrances.groupBy({
-      by: ['userTelegramId'],
-      where: {
-        mailingReservationId: mailingReservation.id
-      },
-      _count: {
-        userTelegramId: true
-      }
-    });
-
-    this.logger.log(`📊 Reservation ${mailingReservation.id}: entrance #${totalEntrances}, unique users: ${uniqueUsers.length}`);
-
-    return {
-      success: true,
-      entrance: entrance,
-      isFirstEntrance: isFirstEntrance,
-      canCreateNew: true,
-      statistics: {
-        totalEntrances: totalEntrances,
-        uniqueUsers: uniqueUsers.length,
-        reservationId: mailingReservation.id
-      }
-    };
-  }
 
 
   async findAll() {
@@ -563,17 +449,7 @@ export class BotSellersService {
     });
   }
 
-  async findBotSellerByLink(link: string): Promise<BotSeller | null> {
-    return await this.prisma.botSeller.findFirst({
-      include: {
-        MailingTargetBots: {
-          where: {
-            link: link,
-          }
-        }
-      }
-    });
-  }
+
 
   async findByTelegramId(telegramId: string) {
     const user = await this.prisma.user.findUnique({
@@ -725,4 +601,4 @@ export class BotSellersService {
       throw error;
     }
   }
-} 
+}

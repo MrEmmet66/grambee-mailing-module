@@ -180,8 +180,7 @@ export class ReservationService {
             const updatedMailing = await this.prismaService.mailing.update({
                 where: { id: mailingId },
                 data: {
-                    isActive: false,
-                    status: 'COMPLETED'
+                    isActive: false
                 }
             });
 
@@ -192,19 +191,6 @@ export class ReservationService {
         return null;
     }
 
-    async getMailingReservationByLink(link: string) {
-        return await this.prismaService.mailingReservation.findFirst({
-            where: {
-                trackingLink: link,
-                isProcessed: true,
-                adminApprovalStatus: { not: 'FROZEN' }
-            },
-            include: {
-                mailing: true,
-                botSeller: true
-            }
-        });
-    }
 
     async reserveMailingDay(dto: CreateMailingReservationDto): Promise<ReservationCreationResult> {
         if (!Array.isArray(dto.dates) || dto.dates.length === 0) {
@@ -227,7 +213,9 @@ export class ReservationService {
 
         // Получаем комиссии сервиса из конфига
         const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
-        const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);
+        const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.00005);
+        const serviceDefaultSubscriberPrice = this.configService.get<number>('SERVICE_DEFAULT_SUBSCRIBER_PRICE', 0.0005);
+        const serviceChannelDefaultSubscriberPrice = this.configService.get<number>('SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE', 0.0002);
 
         // Получаем пользователя из мейлинга для холда баланса
         const user = await this.prismaService.user.findUnique({
@@ -259,37 +247,31 @@ export class ReservationService {
             let baseAmount = 0;
             let serviceCommission = 0;
             if (dto.paymentType === 'fixed') {
-                baseAmount = botSeller.fixedPrice || 0;
-                serviceCommission = serviceCommissionFixed;
+                baseAmount = Number(botSeller.fixedPrice) || 0;
+                serviceCommission = Number(serviceCommissionFixed) || 0;
                 heldAmount = baseAmount + serviceCommission;
             } else if (dto.paymentType === 'subscriber') {
-                if (mailing.botToken === null) {
-                    throw new PreconditionFailedException('Bot token is required for subscriber payment type');
-                }
-                if (mailing.isChannel && mailing.channelId !== null) {
-                    const maxUsers = botSeller.channelAudience || 0;
-                    if (maxUsers <= 0) {
-                        throw new PreconditionFailedException('Channel audience data is required for subscriber payment');
-                    } else {
-                        baseAmount = (botSeller.subscriberPrice || 0) * maxUsers;
-                        serviceCommission = serviceCommissionPerUser * maxUsers;
-                    }
+                if (mailing.isChannel) {
+                    baseAmount = Number(botSeller.fixedPrice) || 0;
+                    serviceCommission = Number(serviceCommissionPerUser) || 0;
                 } else {
-                    const maxUsers = botSeller.botLiveAudience || 0;
+                    const maxUsers = Number(botSeller.totalBotAudience) || 0;
                     if (maxUsers <= 0) {
                         throw new PreconditionFailedException('Bot audience data is required for subscriber payment');
                     } else {
-                        baseAmount = (botSeller.subscriberPrice || 0) * maxUsers;
-                        serviceCommission = serviceCommissionPerUser * maxUsers;
+                        baseAmount = Number(serviceDefaultSubscriberPrice) * maxUsers;
+                        serviceCommission = Number(serviceCommissionPerUser) * maxUsers;
                     }
                 }
                 heldAmount = baseAmount + serviceCommission;
             } else {
-                baseAmount = botSeller.fixedPrice || 0;
-                serviceCommission = serviceCommissionFixed;
+                baseAmount = Number(botSeller.fixedPrice) || 0;
+                serviceCommission = Number(serviceCommissionFixed) || 0;
                 heldAmount = baseAmount + serviceCommission;
             }
-
+            if (isNaN(heldAmount) || heldAmount <= 0) {
+                throw new PreconditionFailedException('Calculated heldAmount is invalid.');
+            }
             // Холдим баланс для каждой даты
             try {
                 this.logger.log(`Holding balance for mailing reservation: ${heldAmount} (date: ${date})`);
@@ -302,24 +284,15 @@ export class ReservationService {
                 throw new PreconditionFailedException(`Не удалось зарезервировать средства на дату ${date}: ${error.message}`);
             }
 
-            // Генерируем trackingLink для каждой даты
-            const trackingLink = await this.telegramService.generateTrackingLink(
-                mailing.isChannel,
-                mailing.channelId,
-                dto.mailingId,
-                dto.sellerId,
-                mailing.botLink || '',
-                mailing.botToken || botSeller.botToken
-            );
+
 
             const reservation = await this.prismaService.mailingReservation.create({
                 data: {
                     mailingId: Number(dto.mailingId),
                     botSellerId: Number(dto.sellerId),
                     date: date,
-                    selectedFilters: {}, // или null, если поле допускает null
                     heldAmount: parseFloat(heldAmount.toString()),
-                    trackingLink: trackingLink
+                    trackingLink: mailing.link,
                 }
             });
             reservations.push(reservation);
@@ -338,7 +311,6 @@ export class ReservationService {
                 data: {
                     botSellerId: dto.sellerId,
                     mailingId: dto.mailingId,
-                    link: reservations[0].trackingLink || '',
                     paymentType: dto.paymentType || 'fixed',
                 }
             });
@@ -421,5 +393,24 @@ export class ReservationService {
                 cancellationFee
             }
         };
+    }
+
+    async updateReservationViews(reservationId: number, views: number): Promise<MailingReservation> {
+        const reservation = await this.prismaService.mailingReservation.findUnique({
+            where: { id: reservationId }
+        });
+
+        if (!reservation) {
+            throw new NotFoundException(`Reservation with ID ${reservationId} not found`);
+        }
+
+        const updatedReservation = await this.prismaService.mailingReservation.update({
+            where: { id: reservationId },
+            data: {
+                viewCount: views
+            }
+        });
+
+        return updatedReservation;
     }
 }

@@ -8,6 +8,7 @@ import { MailingPaymentService } from '../mailing/services/payment.service';
 import { StatsService } from '../mailing/stats/stats.service';
 import { MailingNotifyProps } from './telegram.types';
 import { TelegramService } from './telegram.service';
+import { ProcessorService } from '../mailing/services/processor.service';
 
 @Injectable()
 export class ApplicationsService {
@@ -20,6 +21,8 @@ export class ApplicationsService {
         private readonly mailingPaymentService: MailingPaymentService,
         private readonly statsService: StatsService,
         private readonly telegramService: TelegramService,
+        @Inject(forwardRef(() => ProcessorService))
+        private readonly processorService: ProcessorService,
         @InjectBot() private readonly bot: Telegraf<Context>
     ) { }
 
@@ -32,32 +35,37 @@ export class ApplicationsService {
         const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "-1002677251791";
         const notifyTopicId = this.configService.get<number>('MAILING_NOTIFY_TOPIC_ID') || 14;
 
-        const message = `
-            🚀 **Рассылка отправлена**
+        // Escape HTML utility
+        const escape = (text: any) => String(text || '').replace(/[&<>]/g, t => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[t] || t));
 
-            **Тип:** ${props.isChannel ? 'Канал' : 'Бот'}
-            **Стоимость:** ${props.paymentType === 'fixed' ? `Фиксированная (${props.fixedPrice}р)` : `Постоплата пдп (${props.subscriberPrice}р)`}
-            **Дата рекламы:** ${props.mailingDate.toLocaleDateString()}
-            **Источник:** ${props.botSellerLink} @${props.botSellerOwnerUsername || 'неизвестно'}
-            **Заказчик:** ${props.mailingLink} @${props.mailingOwnerUsername || 'неизвестно'}`;
+        const message =
+            `<b>🚀 Рассылка отправлена</b>\n\n` +
+            `<b>Тип:</b> ${props.isChannel ? 'Канал' : 'Бот'}\n` +
+            `<b>Стоимость:</b> ${props.paymentType === 'fixed' ? `Фиксированная (${escape(String(props.fixedPrice))}р)` : `Постоплата пдп (${escape(String(props.subscriberPrice))}$)`}\n` +
+            `<b>Дата рекламы:</b> ${escape(props.mailingDate.toLocaleDateString())}\n` +
+            `<b>Источник:</b> ${escape(props.botSellerLink)} @${escape(props.botSellerOwnerUsername || 'неизвестно')}\n` +
+            `<b>Заказчик:</b> ${escape(props.mailingLink)} @${escape(props.mailingOwnerUsername || 'неизвестно')}`;
 
         const keyboard = {
-        inline_keyboard: [
-            [
-                { text: "👀 Посмотреть пост", callback_data: `view_post:${props.reservationId}` },
-                { text: "✅ Одобрить", callback_data: `approve_mailing_process:${props.reservationId}` }
-            ],
-            [
-                { text: "❄️ Заморозить", callback_data: `freeze_mailing_process:${props.reservationId}` },
-                { text: "📊 Статистика", callback_data: `stats:${props.reservationId}` }
+            inline_keyboard: [
+                [
+                    { text: "👀 Посмотреть пост", callback_data: `view_post:${props.reservationId}` },
+                    { text: "✅ Одобрить", callback_data: `approve_mailing_process:${props.reservationId}` }
+                ],
+                [
+                    { text: "❄️ Заморозить", callback_data: `freeze_mailing_process:${props.reservationId}` },
+                    { text: "📊 Статистика", callback_data: `stats:${props.reservationId}` }
+                ]
             ]
-        ]
-    };
+        };
 
-    await this.bot.telegram.sendMessage(chatId, message, {
-        reply_markup: keyboard
-    });
-}
+        await this.bot.telegram.sendMessage(chatId, message, {
+            reply_markup: keyboard,
+            parse_mode: 'HTML',
+            message_thread_id: notifyTopicId,
+        });
+
+    }
 
     async getUsernameByTelegramId(telegramId: number): Promise<string | null> {
         const chatId = await this.getChatIdByTelegramId(telegramId);
@@ -117,15 +125,13 @@ export class ApplicationsService {
 
         // Determine if this is a channel or bot mailing
         const targetType = mailing.isChannel ? 'Канал' : 'Бот';
-        const targetId = mailing.isChannel ? mailing.channelId : mailing.botLink || 'Не указана';
-        const targetLink = mailing.isChannel ? 'Недоступно для канала' : (mailing.botLink || 'Не указана');
+        const targetLink = mailing.link;
 
         const message =
             `<b>📨 НОВАЯ ЗАЯВКА НА РАССЫЛКУ</b>\n\n` +
             `<b>👤 Пользователь:</b> #${mailing.userId}\n` +
             `<b>🎯 Тип цели:</b> ${targetType}\n` +
-            `<b>🆔 ID ${targetType.toLowerCase()}а:</b> <code>${targetId}</code>\n` +
-            (mailing.isChannel ? '' : `<b>🔗 Ссылка на бота:</b> ${targetLink}\n`) +
+            `<b>🔗 Ссылка:</b> ${targetLink}\n` +
             `<b>📅 Дата создания:</b> ${new Date().toLocaleString('ru-RU')}\n` +
             `<b>📊 Статус:</b> ${statusEmoji} ${mailing.status}\n\n` +
             `<b>📝 Контент:</b>\n<pre>${mailing.postContent}</pre>\n\n` +
@@ -311,22 +317,8 @@ export class ApplicationsService {
             const mailingId = this.extractMailingId(ctx);
             console.log(`Confirming mailing application: ${mailingId}`);
 
-            // Update the mailing status in the database
-            try {
-                await this.mailingService.updateMailingStatus(Number(mailingId), 'APPROVED');
-                const mailing = await this.mailingService.getMailingById(Number(mailingId));
-                if (!mailing) {
-                    throw new HttpException(`Mailing with ID ${mailingId} not found`, HttpStatus.NOT_FOUND);
-                }
-                if(mailing.botToken && mailing.isChannel) {
-                    this.telegramService.setupWebhook(mailing.botToken || '');
-                }
-                console.log(`Mailing ${mailingId} status updated to APPROVED`);
-            } catch (error) {
-                console.error(`Error updating mailing status in database: ${error.message}`);
-                await ctx.answerCbQuery(`Ошибка обновления статуса в базе данных: ${error.message}`);
-                return false;
-            }
+            // Update the mailing status in the database (заменено на processorService)
+            await this.processorService.updateMailingStatus(Number(mailingId), 'APPROVED');
 
             await ctx.answerCbQuery(`✅ Заявка на рассылку #${mailingId} подтверждена`);
 
@@ -362,15 +354,8 @@ export class ApplicationsService {
             const mailingId = this.extractMailingId(ctx);
             console.log(`Rejecting mailing application: ${mailingId}`);
 
-            // Update the mailing status in the database
-            try {
-                await this.mailingService.updateMailingStatus(Number(mailingId), 'REJECTED');
-                console.log(`Mailing ${mailingId} status updated to REJECTED`);
-            } catch (error) {
-                console.error(`Error updating mailing status in database: ${error.message}`);
-                await ctx.answerCbQuery(`Ошибка обновления статуса в базе данных: ${error.message}`);
-                return false;
-            }
+            // Update the mailing status in the database (заменено на processorService)
+            await this.processorService.updateMailingStatus(Number(mailingId), 'REJECTED');
 
             await ctx.answerCbQuery(`❌ Заявка на рассылку #${mailingId} отклонена`);
 
@@ -405,15 +390,8 @@ export class ApplicationsService {
             const mailingId = this.extractMailingId(ctx);
             console.log(`Setting mailing application to waiting: ${mailingId}`);
 
-            // Update the mailing status in the database
-            try {
-                await this.mailingService.updateMailingStatus(Number(mailingId), 'WAITING');
-                console.log(`Mailing ${mailingId} status updated to WAITING`);
-            } catch (error) {
-                console.error(`Error updating mailing status in database: ${error.message}`);
-                await ctx.answerCbQuery(`Ошибка обновления статуса в базе данных: ${error.message}`);
-                return false;
-            }
+            // Update the mailing status in the database (заменено на processorService)
+            await this.processorService.updateMailingStatus(Number(mailingId), 'WAITING');
 
             await ctx.answerCbQuery(`⏳ Заявка на рассылку #${mailingId} отправлена в ожидание`);
 
@@ -850,6 +828,8 @@ export class ApplicationsService {
     }
 
     private async handleGetStatistics(ctx: Context) {
+        const botToken = this.configService.get<string>('MAIN_BOT');
+        const apiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
         try {
             const reservationId = this.extractReservationId(ctx);
             console.log(`Getting statistics for reservation: ${reservationId}`);
@@ -863,6 +843,7 @@ export class ApplicationsService {
             let statsMessage: string;
 
             if (reservation.botSeller.isChannel) {
+                await this.mailingService.updateChannelViews(reservation);
                 const channelStats = await this.statsService.getChannelStatistics(Number(reservationId));
                 statsMessage = await this.statsService.formatChannelStatistics(channelStats);
             } else {
@@ -870,10 +851,18 @@ export class ApplicationsService {
                 statsMessage = await this.statsService.formatBotStatistics(botStats);
             }
 
-            // Send statistics to admin privately
+            // Send statistics to admin privately via Telegram Bot API
             const adminId = ctx.from?.id;
             if (adminId) {
-                await this.bot.telegram.sendMessage(adminId, statsMessage, { parse_mode: 'HTML' });
+                await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chat_id: adminId,
+                        text: statsMessage,
+                        parse_mode: 'HTML'
+                    })
+                });
                 await ctx.answerCbQuery('Статистика отправлена в ЛС');
             }
 
@@ -881,7 +870,8 @@ export class ApplicationsService {
             console.error('Error getting statistics:', error);
             await ctx.answerCbQuery('Ошибка при получении статистики');
         }
-    }    private async handleConfirmApprove(ctx: Context) {
+    }    
+    private async handleConfirmApprove(ctx: Context) {
         try {
             const reservationId = this.extractReservationId(ctx);
             console.log(`Confirming approval for reservation: ${reservationId}`);
@@ -1000,6 +990,8 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
 
     // ✅ Новый метод для отправки уведомлений об одобрении
     private async sendApprovalNotifications(reservation: any, paymentResult: any) {
+        const botToken = this.configService.get<string>('MAIN_BOT', '');
+        const apiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
         try {
             // Уведомление заказчику (владельцу рассылки)
             const customerMessage = `
@@ -1022,8 +1014,7 @@ ${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentRe
 💰 **ОПЛАТА ЗА РЕКЛАМУ ЗАЧИСЛЕНА**
 
 🆔 **ID рассылки:** #${reservation.mailingId}
-💵 **Зачислено на баланс:** ${paymentResult.sellerAmount}р
-🏢 **Комиссия сервиса:** ${paymentResult.serviceCommission}р
+💵 **Зачислено на баланс:** ${paymentResult.sellerAmount}$
 📊 **Переходов:** ${paymentResult.entranceCount}
 
 📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
@@ -1033,9 +1024,25 @@ ${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentRe
 Отличная работа! Продолжайте зарабатывать с нами! 💪
             `;
 
-            // Отправляем уведомления
-            await this.bot.telegram.sendMessage(reservation.mailing.user.telegramId, customerMessage, { parse_mode: 'Markdown' });
-            await this.bot.telegram.sendMessage(reservation.botSeller.user.telegramId, sellerMessage, { parse_mode: 'Markdown' });
+            // Отправляем уведомления через Telegram Bot API
+            await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: reservation.mailing.user.telegramId,
+                    text: customerMessage,
+                    parse_mode: 'Markdown'
+                })
+            });
+            await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: reservation.botSeller.user.telegramId,
+                    text: sellerMessage,
+                    parse_mode: 'Markdown'
+                })
+            });
 
             console.log(`Approval notifications sent for reservation ${reservation.id}`);
         } catch (error) {
@@ -1045,6 +1052,8 @@ ${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentRe
 
     // ✅ Новый метод для отправки уведомлений о заморозке
     private async sendFreezeNotifications(reservation: any, reason: string) {
+        const botToken = this.configService.get<string>('MAIN_BOT', '');
+        const apiUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
         try {
             // Уведомление заказчику (владельцу рассылки)
             const customerMessage = `
@@ -1077,9 +1086,25 @@ ${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentRe
 Администрация рассмотрит рекламу дополнительно. Ожидайте решения.
             `;
 
-            // Отправляем уведомления
-            await this.bot.telegram.sendMessage(reservation.mailing.user.telegramId, customerMessage, { parse_mode: 'Markdown' });
-            await this.bot.telegram.sendMessage(reservation.botSeller.user.telegramId, sellerMessage, { parse_mode: 'Markdown' });
+            // Отправляем уведомления через Telegram Bot API
+            await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: reservation.mailing.user.telegramId,
+                    text: customerMessage,
+                    parse_mode: 'Markdown'
+                })
+            });
+            await fetch(apiUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chat_id: reservation.botSeller.user.telegramId,
+                    text: sellerMessage,
+                    parse_mode: 'Markdown'
+                })
+            });
 
             console.log(`Freeze notifications sent for reservation ${reservation.id}`);
         } catch (error) {

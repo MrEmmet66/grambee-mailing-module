@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { ConfigService } from '@nestjs/config';
 import { InjectBot } from 'nestjs-telegraf';
 import { Context, Telegraf } from 'telegraf';
+import * as fs from 'fs';
 
 @Injectable()
 export class TelegramService {
@@ -139,5 +140,119 @@ export class TelegramService {
     } else {
       throw new HttpException(`Failed to set webhook: ${response.data.description}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+
+  async sendTextMessage(botToken: string, chatId: string | number, text: string, inlineKeyboard?: any) {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'HTML',
+        reply_markup: inlineKeyboard
+      }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Failed to send message: ${JSON.stringify(errorData)}`);
+    }
+    return await response.json();
+  }
+
+  async sendMediaMessage(botToken: string, chatId: string | number, mailing: any, inlineKeyboard?: any) {
+    if (!botToken || !botToken.includes(':')) {
+      throw new Error(`Invalid bot token format`);
+    }
+    let mediaType = mailing.postMediaType || 'photo';
+    let endpoint;
+    switch (mediaType.toLowerCase()) {
+      case 'photo': endpoint = 'sendPhoto'; break;
+      case 'video': endpoint = 'sendVideo'; break;
+      case 'document': endpoint = 'sendDocument'; break;
+      case 'audio': endpoint = 'sendAudio'; break;
+      default: endpoint = 'sendPhoto';
+    }
+    const url = `https://api.telegram.org/bot${botToken}/${endpoint}`;
+    const mediaUrl = process.cwd() + mailing.postMedia;
+    if (!fs.existsSync(mediaUrl)) {
+      throw new Error(`Media file not found: ${mediaUrl}`);
+    }
+    const stats = fs.statSync(mediaUrl);
+    if (stats.size === 0) {
+      throw new Error(`Media file is empty: ${mediaUrl}`);
+    }
+    const maxSizes = {
+      photo: 10 * 1024 * 1024,
+      video: 50 * 1024 * 1024,
+      document: 50 * 1024 * 1024,
+      audio: 50 * 1024 * 1024
+    };
+    if (stats.size > (maxSizes[mediaType.toLowerCase()] || maxSizes.photo)) {
+      throw new Error(`File too large for ${mediaType}: ${stats.size} bytes`);
+    }
+    try {
+      const FormData = require('form-data');
+      const formData = new FormData();
+      formData.append('chat_id', chatId);
+      if (mailing.postContent && mailing.postContent.trim()) {
+        formData.append('caption', mailing.postContent);
+        formData.append('parse_mode', 'HTML');
+      }
+      if (inlineKeyboard) {
+        formData.append('reply_markup', JSON.stringify(inlineKeyboard));
+      }
+      const mediaField = mediaType.toLowerCase() === 'photo' ? 'photo' :
+        mediaType.toLowerCase() === 'video' ? 'video' :
+        mediaType.toLowerCase() === 'audio' ? 'audio' : 'document';
+      formData.append(mediaField, fs.createReadStream(mediaUrl));
+      const response = await this.httpService.axiosRef({
+        method: 'POST',
+        url: url,
+        data: formData,
+        headers: { ...formData.getHeaders() },
+        timeout: 60000,
+        validateStatus: function (status) { return status < 500; }
+      });
+      if (response.status >= 400) {
+        throw new Error(`Failed to send media message: ${JSON.stringify(response.data)}`);
+      }
+      return response.data;
+    } catch (error) {
+      if (error.response && error.response.data && error.response.data.description) {
+        throw new Error(`Telegram API error: ${error.response.data.description}`);
+      }
+      if (mediaType.toLowerCase() !== 'document') {
+        try {
+          const documentMailing = { ...mailing, postMediaType: 'document' };
+          return await this.sendMediaMessage(botToken, chatId, documentMailing, inlineKeyboard);
+        } catch (fallbackError) {}
+      }
+      throw error;
+    }
+  }
+
+  buildInlineKeyboard(buttons: any) {
+    if (buttons && typeof buttons === 'object' && buttons.inline_keyboard) {
+      return buttons;
+    }
+    return undefined;
+  }
+
+  createButtonWithInviteLink(buttonText: string, inviteLink: string) {
+    if (!buttonText || !inviteLink) {
+      return undefined;
+    }
+    return {
+      inline_keyboard: [
+        [
+          {
+            text: buttonText,
+            url: inviteLink
+          }
+        ]
+      ]
+    };
   }
 }

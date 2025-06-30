@@ -1,15 +1,18 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
 import { BotSellersService } from './bot-sellers.service';
-import { CreateBotSellerDto, UpdateBotSellerDto } from './dto';
+import { CreateBotSellerDto, CreateBotSellerFormData, UpdateBotSellerDto } from './dto';
 import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
+import { ConfigService } from '@nestjs/config';
 
 @ApiTags('Bot Sellers')
 @Controller('bot-sellers')
 export class BotSellersController {
-  constructor(private readonly botSellersService: BotSellersService) {}
+  constructor(private readonly botSellersService: BotSellersService,
+              private readonly configService: ConfigService
+  ) {}
 
   @Post()
   @ApiOperation({ summary: 'Создание нового продавца ботов' })
@@ -21,6 +24,8 @@ export class BotSellersController {
       storage: diskStorage({
         destination: './uploads/bot_users',
         filename: (req, file, callback) => {
+          console.log('FileInterceptor received file:', file.originalname);
+          
           const botToken = req.body.botToken;
           const sanitizedToken = botToken ? botToken.replace(/[^a-zA-Z0-9]/g, '_') : '';
           const fileName = `${sanitizedToken}_statistics${extname(file.originalname)}`;
@@ -30,9 +35,6 @@ export class BotSellersController {
       fileFilter: (req, file, callback) => {
         if (file.mimetype !== 'text/plain' && !file.originalname.toLowerCase().endsWith('.txt')) {
           return callback(new Error('Только .txt файлы разрешены'), false);
-        }
-        if (parseInt(req.headers['content-length']) > 5 * 1024 * 1024) {
-          return callback(new Error('Максимальный размер файла - 5MB'), false);
         }
         callback(null, true);
       },
@@ -50,19 +52,30 @@ export class BotSellersController {
       console.log('Controller received statisticsFile:', statisticsFile.originalname);
     }
     console.log('Controller received createBotSellerDto:', createBotSellerDto);
+    const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
     
-
-    // Form data often sends boolean values as strings, so we need to convert explicitly
-    if (createBotSellerDto.isChannel !== undefined) {
-      // Convert string 'true'/'false' to boolean
-      if (typeof createBotSellerDto.isChannel === 'string') {
-        createBotSellerDto.isChannel = createBotSellerDto.isChannel === 'true';
-      }
+    if(createBotSellerDto.isChannel === 'true') {
+      createBotSellerDto.botToken = mainBotToken;
     }
+
+    const botSellerData: CreateBotSellerFormData = {
+      userId: createBotSellerDto.userId,
+      telegramId: createBotSellerDto.telegramId,
+      botToken: createBotSellerDto.botToken || mainBotToken,
+      usersData: createBotSellerDto.usersData,
+      description: createBotSellerDto.description,
+      fixedPrice: createBotSellerDto.fixedPrice,
+      link: createBotSellerDto.link,
+      isChannel: String(createBotSellerDto.isChannel).toLowerCase() === 'true',
+      statisticsFile: statisticsFile ? statisticsFile : undefined,
+      channelId: createBotSellerDto.channelId,
+    }
+    console.log('statisticsFile:', statisticsFile);
+    
     
     console.log('Controller received isChannel:', createBotSellerDto.isChannel);
-    
-    return this.botSellersService.create(createBotSellerDto, statisticsFile);
+
+    return this.botSellersService.create(botSellerData, statisticsFile);
   }
 
   @Get()
@@ -274,4 +287,4 @@ export class BotSellersController {
   ) {
     return this.botSellersService.uploadStatistics(+id, statisticsFile);
   }
-} 
+}

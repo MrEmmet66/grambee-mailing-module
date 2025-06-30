@@ -57,6 +57,28 @@ services:
       - app-network
     restart: unless-stopped
 
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  telethon-api:
+    container_name: telethon-api
+    build:
+      context: ./telethon
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+
 networks:
   app-network:
     driver: bridge

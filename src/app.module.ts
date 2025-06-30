@@ -1,3 +1,4 @@
+import { MailingCheckoutService } from './modules/mailing/services/mailingcheckout.service';
 import { PrismaModule } from 'prisma/prisma.module';
 
 import { MailingModule } from './modules/mailing/mailing.module';
