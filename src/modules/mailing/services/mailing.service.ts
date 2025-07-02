@@ -132,10 +132,7 @@ export class MailingService {
         // get user by id or telegramId
         const user = await this.prismaService.user.findFirst({
             where: {
-                OR: [
-                    { id: dto.userId },
-                    { telegramId: String(dto.userId) } // Support both ID and Telegram ID
-                ]
+                telegramId: String(dto.userId) // Support both ID and Telegram ID
             }
         });
 
@@ -153,7 +150,6 @@ export class MailingService {
             const existingMailing = await this.prismaService.mailing.findFirst({
                 where: {
                     OR: [
-                        ...(dto.botToken ? [{ botToken: dto.botToken }] : []),
                         ...(dto.link ? [{ link: dto.link }] : [])
                     ]
                 }
@@ -164,24 +160,9 @@ export class MailingService {
                 throw new ConflictException(`Mailing with the same botToken, channelId or botLink already exists`);
             }
 
-            const existingBotSeller = await this.prismaService.botSeller.findFirst({
-                where: {
-                    OR: [
-                        { botToken: dto.botToken },
-                        { link: dto.link },
-                    ]
-                }
-            });
-
-            if (existingBotSeller) {
-                this.logger.warn(`BotSeller with the same botToken, channelId or link already exists`);
-                throw new ConflictException(`BotSeller with the same botToken, channelId or link already exists`);
-            }
-
             // Store button text directly (no need for JSON parsing)
             const mailing = await this.prismaService.mailing.create({
                 data: {
-                    botToken: dto.botToken,
                     userId: user.id,
                     link: dto.link || '',
                     isChannel: dto.isChannel,

@@ -11,4 +11,9 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   username?: string;
+
+  @ApiProperty({ description: 'Пароль пользователя' })
+  @IsNotEmpty({ message: 'password is required' })
+  @IsString()
+  password: string;
 } 

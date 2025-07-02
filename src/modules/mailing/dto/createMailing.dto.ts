@@ -66,7 +66,6 @@ export interface CreateMailingFormData {
     isChannel?: string;
     content: string;
     mediaType?: string;
-    media?: Express.Multer.File;
     buttonContent: string;
 }
 

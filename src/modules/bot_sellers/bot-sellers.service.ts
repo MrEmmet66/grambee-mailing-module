@@ -289,7 +289,7 @@ export class BotSellersService {
   }
 
   async create(createBotSellerDto: CreateBotSellerFormData, statisticsFile?: Express.Multer.File) {
-    let userId: number;
+    let userId: number = 0;
 
     // Debug log to see the incoming DTO
     this.logger.debug(`Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`);
@@ -299,18 +299,17 @@ export class BotSellersService {
 
 
     if (createBotSellerDto.userId) {
-      await this.validateUser(createBotSellerDto.userId);
-      userId = createBotSellerDto.userId;
-    } else if (createBotSellerDto.telegramId) {
-      userId = await this.getUserByTelegramId(createBotSellerDto.telegramId);
-    } else {
-      throw new BadRequestException('Either userId or telegramId must be provided');
+      userId = await this.getUserByTelegramId(String(createBotSellerDto.userId));
     }
+
+    // проверяем botToken только если isChannel = false
 
     const existingBot = await this.prisma.botSeller.findFirst({
       where: {
         OR: [
-          { botToken: createBotSellerDto.botToken },
+          
+          // ✅ Проверяем botToken только если он действительно передан и isChannel = false
+          ...(createBotSellerDto.isChannel === false && createBotSellerDto.botToken ? [{ botToken: createBotSellerDto.botToken }] : []),
           // ✅ Проверяем channelId только если он действительно передан и isChannel = true
           ...(createBotSellerDto.isChannel === true && createBotSellerDto.channelId ? [{
             channelId: createBotSellerDto.channelId,
@@ -350,7 +349,6 @@ export class BotSellersService {
     const mau = await this.calculateMAU(createBotSellerDto.botToken);
     this.logger.log(`[MAU] Bot ${createBotSellerDto.botToken.slice(0, 10)} has ${mau} monthly active users`);
 
-    const apiKey = this.generateApiKey();
     const statistics = await this.handleStatisticsFile(statisticsFile);
     this.logger.log(`Statistics file processed: ${JSON.stringify(statistics)}`);
 
@@ -358,7 +356,6 @@ export class BotSellersService {
     const botSellerData = {
       ...createBotSellerDto,
       userId,
-      apiKey,
       acceptStatus: 'PENDING',
       statisticsFilePath: statistics?.path || null, // Use the path from the statistics file if available
       usersData: createBotSellerDto.usersData || {},
@@ -534,14 +531,7 @@ export class BotSellersService {
     });
   }
 
-  async regenerateApiKey(id: number) {
-    const apiKey = this.generateApiKey();
 
-    return this.prisma.botSeller.update({
-      where: { id },
-      data: { apiKey },
-    });
-  }
 
   async updateCategory(id: number, category: 'GAMBLING' | 'OTHER' | 'DATING' | 'GAMES' | 'CRYPTO' | 'FUN' | 'TECH' | 'UTILITY') {
     return this.prisma.botSeller.update({

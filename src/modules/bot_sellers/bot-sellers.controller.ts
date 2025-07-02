@@ -162,14 +162,6 @@ export class BotSellersController {
     return this.botSellersService.updateStatus(+id, status);
   }
 
-  @Post(':id/regenerate-api-key')
-  @ApiOperation({ summary: 'Регенерация API ключа для продавца бота' })
-  @ApiParam({ name: 'id', description: 'ID продавца бота' })
-  @ApiResponse({ status: 200, description: 'API ключ успешно обновлен' })
-  regenerateApiKey(@Param('id') id: string) {
-    return this.botSellersService.regenerateApiKey(+id);
-  }
-
   @Patch(':id/statistics')
   @ApiOperation({ summary: 'Обновление статистики продавца бота' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })

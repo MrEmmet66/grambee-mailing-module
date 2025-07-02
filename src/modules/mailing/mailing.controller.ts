@@ -56,6 +56,9 @@ export class MailingController {    constructor(
         ) file: Express.Multer.File,
         @Req() req: Request
     ) {
+
+        console.log('got file:', file);
+        
         
         if (!dto.userId) {
             throw new HttpException('User ID is required', HttpStatus.BAD_REQUEST);

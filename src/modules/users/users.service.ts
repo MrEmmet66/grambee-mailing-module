@@ -1,22 +1,23 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
 import { CreateUserDto, UpdateUserDto } from './dto';
+import { AuthService } from '../auth/auth.service';
 
 @Injectable()
 export class UsersService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    @Inject(forwardRef(() => AuthService))
+    private readonly authService: AuthService,
+  ) {}
 
   async create(createUserDto: CreateUserDto) {
     if (!createUserDto.telegramId) {
       throw new BadRequestException('telegramId is required');
     }
-    
-    return this.prisma.user.create({
-      data: {
-        telegramId: createUserDto.telegramId,
-        username: createUserDto.username,
-      },
-    });
+    // Используем AuthService для регистрации и генерации токенов
+    const { user, accessToken, refreshToken } = await this.authService.register(createUserDto);
+    return { user, accessToken, refreshToken };
   }
 
   async findAll() {
@@ -64,4 +65,4 @@ export class UsersService {
       where: { id },
     });
   }
-} 
+}
