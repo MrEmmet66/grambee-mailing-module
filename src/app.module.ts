@@ -12,6 +12,7 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BalanceModule } from './modules/balance/balance.module';
 import { StatsModule } from './modules/mailing/stats/stats.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
@@ -34,7 +35,8 @@ import { StatsModule } from './modules/mailing/stats/stats.module';
     UsersModule,
     TelegramModule,
     BotSellersModule,
-    StatsModule
+    StatsModule,
+    AuthModule
   ],
   controllers: [
   ],

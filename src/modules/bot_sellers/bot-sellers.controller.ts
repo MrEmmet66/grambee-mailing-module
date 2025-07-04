@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile, UseGuards } from '@nestjs/common';
 import { BotSellersService } from './bot-sellers.service';
 import { CreateBotSellerDto, CreateBotSellerFormData, UpdateBotSellerDto } from './dto';
 import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse, ApiConsumes } from '@nestjs/swagger';
@@ -6,9 +6,11 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { ConfigService } from '@nestjs/config';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Bot Sellers')
 @Controller('bot-sellers')
+@UseGuards(JwtAuthGuard)
 export class BotSellersController {
   constructor(private readonly botSellersService: BotSellersService,
               private readonly configService: ConfigService

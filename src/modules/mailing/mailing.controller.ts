@@ -2,7 +2,7 @@
 https://docs.nestjs.com/controllers#controllers
 */
 
-import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete } from '@nestjs/common';
+import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete, UseGuards } from '@nestjs/common';
 import { MailingService } from './services/mailing.service';
 import { ReservationService } from './services/reservation.service';
 import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateMailingContentDto } from './dto/createMailing.dto';
@@ -14,14 +14,17 @@ import { MailingScheduleService } from './mailingSchedue.service';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiParam } from '@nestjs/swagger';
 import { MailingStatus } from '@prisma/client';
 import { log } from 'console';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('mailings')
 @Controller('mailings')
-export class MailingController {    constructor(
-        private readonly mailingService: MailingService,
-        private readonly mailingScheduleService: MailingScheduleService,
-        private readonly reservationService: ReservationService
-    ) {}
+@UseGuards(JwtAuthGuard)
+export class MailingController {
+        constructor(
+            private readonly mailingService: MailingService,
+            private readonly mailingScheduleService: MailingScheduleService,
+            private readonly reservationService: ReservationService
+        ) { }
 
     @Post()
     @ApiOperation({ summary: 'Создать новую рассылку' })
@@ -58,12 +61,12 @@ export class MailingController {    constructor(
     ) {
 
         console.log('got file:', file);
-        
-        
+
+
         if (!dto.userId) {
             throw new HttpException('User ID is required', HttpStatus.BAD_REQUEST);
         }
-        
+
         if (!dto.content) {
             throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
         }
@@ -71,7 +74,7 @@ export class MailingController {    constructor(
         // Convert userId from string to integer if needed
         const userId = typeof dto.userId === 'string' ? parseInt(dto.userId, 10) : dto.userId;
         const isChannel = dto.isChannel === 'true'
-        
+
         // Prepare data for the service
         const mailingData: CreateMailingDto = {
             botToken: dto.botToken,
@@ -83,14 +86,14 @@ export class MailingController {    constructor(
             link: dto.link, // Optional field
             isChannel: isChannel
         };
-        
+
         // Call the service to create the mailing
         return await this.mailingService.createMailing(mailingData);
     }
 
     @Post('reserve')
     async reserveMailingDay(@Body() dto: CreateMailingReservationDto) {
-        
+
         return await this.reservationService.reserveMailingDay(dto);
     }
 
@@ -129,7 +132,7 @@ export class MailingController {    constructor(
         ) file: Express.Multer.File
     ) {
         const mailingId = parseInt(id, 10);
-        
+
         if (!updateData.content) {
             throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
         }
@@ -150,14 +153,14 @@ export class MailingController {    constructor(
     @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
     async toggleMailingStatus(@Param('id') id: string) {
         return await this.mailingService.toggleMailingStatus(parseInt(id, 10));
-    }    @Delete('reservations/:id')
-    @ApiOperation({ 
+    } @Delete('reservations/:id')
+    @ApiOperation({
         summary: 'Отменить резервирование рассылки по ID',
         description: 'Отменяет резервирование не менее чем за 48 часов до даты. Возвращает покупателю 70%, продавцу 25%, комиссия 5%.'
     })
     @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
-    @ApiResponse({ 
-        status: 200, 
+    @ApiResponse({
+        status: 200,
         description: 'Резервирование отменено с частичным возвратом средств.',
         schema: {
             type: 'object',
@@ -192,10 +195,11 @@ export class MailingController {    constructor(
     }
 
     @Get('run-test/:id')
+    @UseGuards()
     @ApiOperation({ summary: 'Запустить тест рассылки по ID' })
     @ApiParam({ name: 'id', description: 'ID рассылки' })
-    @ApiResponse({ 
-        status: 200, 
+    @ApiResponse({
+        status: 200,
         description: 'Тестовая рассылка запущена.',
         schema: {
             type: 'object',
@@ -219,7 +223,7 @@ export class MailingController {    constructor(
     @ApiResponse({ status: 404, description: 'Рассылка не найдена или неактивна.' })
     async runTestMailing(@Param('id') id: string) {
         console.log(`Running test mailing for ID: ${id}`);
-        
+
         return await this.mailingScheduleService.runMailingById(parseInt(id, 10));
     }
 
@@ -233,25 +237,25 @@ export class MailingController {    constructor(
         if (isNaN(mailingId)) {
             throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
         }
-        
+
         return await this.mailingService.deleteMailing(mailingId);
     }
 
     @Get('reservations/:sellerId')
-@ApiOperation({ summary: 'Получить календарь доступности для резервирования рассылок' })
-@ApiParam({ name: 'sellerId', description: 'ID продавца бота' })
-@ApiResponse({ 
-    status: 200, 
-    description: 'Календарь доступности на 30 дней.',
-})
-async getMailingCalendar(@Param('sellerId') sellerId: string) {
-    const sellerIdNum = parseInt(sellerId, 10);
-    if (isNaN(sellerIdNum)) {
-        throw new HttpException('Invalid seller ID', HttpStatus.BAD_REQUEST);
+    @ApiOperation({ summary: 'Получить календарь доступности для резервирования рассылок' })
+    @ApiParam({ name: 'sellerId', description: 'ID продавца бота' })
+    @ApiResponse({
+        status: 200,
+        description: 'Календарь доступности на 30 дней.',
+    })
+    async getMailingCalendar(@Param('sellerId') sellerId: string) {
+        const sellerIdNum = parseInt(sellerId, 10);
+        if (isNaN(sellerIdNum)) {
+            throw new HttpException('Invalid seller ID', HttpStatus.BAD_REQUEST);
+        }
+
+        return await this.reservationService.getMailingReservationsBySellerId(sellerIdNum);
     }
-    
-    return await this.reservationService.getMailingReservationsBySellerId(sellerIdNum);
-}
 
     @Get('reservations/mailing/:id')
     async getMailingReservations(@Param('id') id: string) {
@@ -269,8 +273,8 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
     @Get('/user/:userId')
     @ApiOperation({ summary: 'Получить все рассылки пользователя' })
     @ApiParam({ name: 'userId', description: 'ID пользователя' })
-    @ApiResponse({ 
-        status: 200, 
+    @ApiResponse({
+        status: 200,
         description: 'Список рассылок пользователя.',
         schema: {
             type: 'array',
@@ -300,8 +304,8 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
 
     @Get('/date')
     @ApiOperation({ summary: 'Получить все рассылки на определенную дату' })
-    @ApiResponse({ 
-        status: 200, 
+    @ApiResponse({
+        status: 200,
         description: 'Список рассылок на определенную дату.',
         schema: {
             type: 'array',
@@ -345,13 +349,13 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
     }
 
     @Get('reservations/:id/can-cancel')
-    @ApiOperation({ 
+    @ApiOperation({
         summary: 'Проверить возможность отмены резервирования',
         description: 'Проверяет, можно ли отменить резервирование и показывает предварительный расчет возврата средств.'
     })
     @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
-    @ApiResponse({ 
-        status: 200, 
+    @ApiResponse({
+        status: 200,
         description: 'Информация о возможности отмены резервирования.',
         schema: {
             type: 'object',
@@ -373,7 +377,7 @@ async getMailingCalendar(@Param('sellerId') sellerId: string) {
     })
     async canCancelReservation(@Param('id') id: string) {
         const reservationId = parseInt(id, 10);
-        
+
         if (isNaN(reservationId)) {
             throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
         }

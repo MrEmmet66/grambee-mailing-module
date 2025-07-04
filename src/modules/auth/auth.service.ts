@@ -52,21 +52,26 @@ export class AuthService {
     if (!this.validatePassword(password, user.passwordHash)) { throw new Error('Invalid password'); }
 
     const tokens = await this.generateTokens(user);
-    await this.authRepository.saveRefreshToken(user.id, tokens.refreshToken);
+    await this.authRepository.saveRefreshToken(Number(telegramId), tokens.refreshToken);
     return tokens;
   }
 
   async refreshToken(userId: number, refreshToken: string) {
-    const user = await this.authRepository.findById(userId);
+    this.logger.log(`Refreshing tokens for userId: ${userId}`);
+    // Получаем пользователя по id
+    const user = await this.authRepository.findByTelegramId(String(userId));
     if (!user) {
+      this.logger.warn(`User not found for refreshToken, userId: ${userId}`);
       throw new Error('User not found');
     }
     const isValid = await this.authRepository.validateRefreshToken(userId, refreshToken);
     if (!isValid) {
+      this.logger.warn(`Invalid refresh token for userId: ${userId}`);
       throw new Error('Invalid refresh token');
     }
     const tokens = await this.generateTokens(user);
     await this.authRepository.saveRefreshToken(userId, tokens.refreshToken);
+    this.logger.log(`Tokens refreshed successfully for userId: ${userId}`);
     return tokens;
   }
 
@@ -82,7 +87,7 @@ export class AuthService {
     };
     const accessToken = this.jwtService.sign(payload, {
       secret: this.jwtService['options'].secret,
-      expiresIn: '15m',
+      expiresIn: '20m',
     });
     const refreshToken = this.jwtService.sign(payload, {
       secret: this.jwtService['options'].secret,

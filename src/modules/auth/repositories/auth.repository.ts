@@ -13,7 +13,7 @@ export class AuthRepository {
     this.logger.log(`Finding user by telegramId: ${telegramId}`);
     try {
       return this.prisma.user.findUnique({
-        where: { telegramId: telegramId }
+        where: { telegramId: String(telegramId) }
       });
     } catch (error) {
       this.logger.error(`Error finding user by telegramId ${telegramId}: ${error.message}`);
@@ -34,8 +34,11 @@ export class AuthRepository {
   async saveRefreshToken(userId: number, refreshToken: string) {
     this.logger.log(`Saving refreshToken for userId: ${userId}`);
     try {
+      // Найти пользователя по id, получить telegramId
+      const user = await this.prisma.user.findUnique({ where: { telegramId: String(userId) } });
+      if (!user) throw new Error(`User with id ${userId} not found`);
       return this.prisma.user.update({
-        where: { id: userId },
+        where: { telegramId: user.telegramId },
         data: { refreshToken }
       });
     } catch (error) {
@@ -47,8 +50,11 @@ export class AuthRepository {
   async validateRefreshToken(userId: number, refreshToken: string) {
     this.logger.log(`Validating refreshToken for userId: ${userId}`);
     try {
-      const user = await this.prisma.user.findUnique({ where: { id: userId } });
-      return user && user.refreshToken === refreshToken;
+      // Найти пользователя по id, получить telegramId
+      const user = await this.prisma.user.findUnique({ where: { telegramId: String(userId) } });
+      if (!user) return false;
+      const userByTelegram = await this.prisma.user.findUnique({ where: { telegramId: user.telegramId } });
+      return userByTelegram && userByTelegram.refreshToken === refreshToken;
     } catch (error) {
       this.logger.error(`Error validating refreshToken for userId ${userId}: ${error.message}`);
       throw error;
