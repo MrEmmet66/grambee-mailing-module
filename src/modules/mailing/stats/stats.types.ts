@@ -13,6 +13,12 @@ export interface BotStatistics {
         leftAfterStart: number;
     };
     audienceAnalysis: Record<string, { count: number; percentage: number }>;
+    totalSent: number;
+    totalFailed: number;
+    totalUsers: number;
+    averageSpeed: number; // Average speed of the mailing queue in seconds
+    queueStart: Date; // Start time of the mailing queue
+    queueEnd: Date; // End time of the mailing queue
 }
 
 export interface ChannelStatistics {

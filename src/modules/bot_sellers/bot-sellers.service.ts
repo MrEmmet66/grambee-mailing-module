@@ -32,6 +32,19 @@ export class BotSellersService {
     return crypto.randomBytes(16).toString('hex');
   }
 
+  async getBotSellerOwnerTelegramId(botSellerId: number): Promise<string> {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+      select: { user: { select: { telegramId: true } } }
+    });
+
+    if (!botSeller || !botSeller.user) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    return botSeller.user.telegramId;
+  }
+
   async findByMailingId(mailingId: number) {
     return await this.prisma.botSeller.findMany({
       where: {
@@ -106,28 +119,50 @@ export class BotSellersService {
     });
   }
 
-  async findAllPaged(page: number, limit: number, search: string) {
+  async findAllPaged(page: number, limit: number, search: string, categoriesJson?: string) {
     const skip = (page - 1) * limit;
     const take = limit;
+    const categories = categoriesJson ? JSON.parse(categoriesJson) : null;
 
-    return this.prisma.botSeller.findMany({
-      where: {
-        AND: [
-          { acceptStatus: 'APPROVED' },
+    // Корректный фильтр для поиска
+    const baseWhere: any = {
+      acceptStatus: 'APPROVED',
+      isActive: true,
+    };
 
-
-        ],
+    let where: any = baseWhere;
+    if (search && search.trim() !== '') {
+      where = {
+        ...baseWhere,
         OR: [
-          { botToken: { contains: search, mode: 'insensitive' } },
-          { user: { username: { contains: search, mode: 'insensitive' } } },
+          { link: { contains: search, mode: 'insensitive' } },
+          { category: { in: categories || [] } },
+
         ],
-      },
+      };
+    }
+
+    // Получаем общее количество
+    const totalCount = await this.prisma.botSeller.count({ where });
+    const totalPages = Math.ceil(totalCount / limit);
+
+    // Получаем текущую страницу
+    const items = await this.prisma.botSeller.findMany({
+      where,
       include: {
         user: true,
       },
       skip,
       take,
     });
+
+    return {
+      items,
+      totalPages,
+      totalCount,
+      page,
+      limit,
+    };
   }
 
   private async calculateMAU(botToken: string): Promise<number> {

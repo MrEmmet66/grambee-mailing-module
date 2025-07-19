@@ -9,10 +9,11 @@ import { StatsService } from '../mailing/stats/stats.service';
 import { MailingNotifyProps } from './telegram.types';
 import { TelegramService } from './telegram.service';
 import { ProcessorService } from '../mailing/services/processor.service';
+import { BotSellersService } from '../bot_sellers';
 
 @Injectable()
 export class ApplicationsService {
-    private botSellersService: any;
+    private botSellersService: BotSellersService;
 
     constructor(
         private configService: ConfigService,
@@ -27,7 +28,7 @@ export class ApplicationsService {
     ) { }
 
     // This method will be called after all providers are resolved
-    setBotSellersService(botSellersService: any) {
+    setBotSellersService(botSellersService: BotSellersService) {
         this.botSellersService = botSellersService;
     }
 
@@ -36,7 +37,7 @@ export class ApplicationsService {
         const notifyTopicId = this.configService.get<number>('MAILING_NOTIFY_TOPIC_ID') || 14;
 
         // Escape HTML utility
-        const escape = (text: any) => String(text || '').replace(/[&<>]/g, t => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[t] || t));
+        const escape = (text: any) => String(text || '').replace(/[&<>]/g, t => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[t] || t));
 
         const message =
             `<b>🚀 Рассылка отправлена</b>\n\n` +
@@ -67,6 +68,23 @@ export class ApplicationsService {
 
     }
 
+    async sendNotification(telegramId: string, message: string) {
+        try {
+            await fetch(`${this.configService.get<string>('GATEWAY_URL')}/api/v1/notifications`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    telegramId,
+                    message,
+                }),
+            });
+        } catch (error) {
+            console.error('Error sending notification:', error);
+        }
+    }
+
     async getUsernameByTelegramId(telegramId: number): Promise<string | null> {
         const chatId = await this.getChatIdByTelegramId(telegramId);
         const user = await this.bot.telegram.getChatMember(chatId, telegramId);
@@ -74,8 +92,8 @@ export class ApplicationsService {
     }
 
     async getChatIdByTelegramId(telegramId: number): Promise<string> {
-            const chat = await this.bot.telegram.getChat(telegramId);
-            return chat ? chat.id.toString() : '';
+        const chat = await this.bot.telegram.getChat(telegramId);
+        return chat ? chat.id.toString() : '';
     }
 
     async sendMailingApplication(mailing: Mailing) {
@@ -325,8 +343,7 @@ export class ApplicationsService {
             const message =
                 `<b>✅ ЗАЯВКА НА РАССЫЛКУ ПОДТВЕРЖДЕНА</b>\n\n` +
                 `<b>🆔 ID заявки:</b> #${mailingId}\n` +
-                `<b>🕒 Время обработки:</b> ${new Date().toLocaleString('ru-RU')}\n\n` +
-                `<i>Рассылка была одобрена и будет отправлена пользователям.</i>`;
+                `<b>🕒 Время обработки:</b> ${new Date().toLocaleString('ru-RU')}\n\n`
 
             await ctx.editMessageText(message, {
                 reply_markup: undefined,
@@ -334,8 +351,15 @@ export class ApplicationsService {
             });
 
             const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
+            const mailing = await this.mailingService.getMailingById(Number(mailingId));
+            const notificationMessage =
+                `— Статус модерации:\n` +
+                `Рассылка ${mailing.link}\n\n` +
+                `Ваша рассылка была успешно одобрена.`;
 
-            await this.telegramService.notifyUser(mailingOwnerTelegramId, "✅Ваша заявка на рассылку была одобрена!\n\nДля старта вам нужно забронировать дату рассылки у продавцов, после чего вы сможете начать рассылку.")
+            await this.sendNotification(mailingOwnerTelegramId, notificationMessage);
+
+            await this.telegramService.notifyUser(mailingOwnerTelegramId, notificationMessage);
 
             return true;
         } catch (error) {
@@ -371,7 +395,15 @@ export class ApplicationsService {
             });
             const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
 
-            await this.telegramService.notifyUser(mailingOwnerTelegramId, "❌Ваша заявка на рассылку была отклонена!\n\n");
+            const mailing = await this.mailingService.getMailingById(Number(mailingId));
+            const notificationMessage =
+                `— Статус модерации:\n` +
+                `Рассылка ${mailing.link}\n\n` +
+                `Ваша рассылка была отклонена.`;
+
+            await this.sendNotification(mailingOwnerTelegramId, notificationMessage);
+
+            await this.telegramService.notifyUser(mailingOwnerTelegramId, notificationMessage);
 
             return true;
         } catch (error) {
@@ -408,7 +440,15 @@ export class ApplicationsService {
 
             const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
 
-            await this.telegramService.notifyUser(mailingOwnerTelegramId, "⏳Ваша заявка на рассылку была отправлена в ожидание! Пожалуйста, подождите пока мы тщательно её проверим.");
+            const mailing = await this.mailingService.getMailingById(Number(mailingId));
+            const notificationMessage =
+                `— Статус модерации:\n` +
+                `Рассылка ${mailing.link}\n\n` +
+                `Ваша рассылка была отправлена в ожидание.`;
+
+            await this.sendNotification(mailingOwnerTelegramId, notificationMessage);
+
+            await this.telegramService.notifyUser(mailingOwnerTelegramId, notificationMessage);
 
             return true;
         } catch (error) {
@@ -457,6 +497,22 @@ export class ApplicationsService {
                 parse_mode: 'HTML'
             });
 
+            const botSeller = await this.botSellersService.findOne(Number(botSellerId));
+            if (!botSeller) {
+                console.error(`Bot seller with ID ${botSellerId} not found`);
+                await ctx.answerCbQuery('Бот не найден в базе данных');
+                return false;
+            }
+            const botSellerOwnerTelegramId = await this.botSellersService.getBotSellerOwnerTelegramId(Number(botSellerId));
+            const notificationMessage =
+                `— Статус модерации:\n` +
+                `${botSeller?.isChannel ? 'Канал' : 'Бот'} ${botSeller.link}\n\n` +
+                `Ваша заявка была успешно одобрена.`;
+
+            await this.sendNotification(botSellerOwnerTelegramId, notificationMessage);
+
+            await this.telegramService.notifyUser(botSellerOwnerTelegramId, notificationMessage);
+
             return true;
         } catch (error) {
             console.error('Error confirming bot seller application:', error);
@@ -504,6 +560,22 @@ export class ApplicationsService {
                 parse_mode: 'HTML'
             });
 
+            const botSeller = await this.botSellersService.findOne(Number(botSellerId));
+            if (!botSeller) {
+                console.error(`Bot seller with ID ${botSellerId} not found`);
+                await ctx.answerCbQuery('Бот не найден в базе данных');
+                return false;
+            }
+            const botSellerOwnerTelegramId = await this.botSellersService.getBotSellerOwnerTelegramId(Number(botSellerId));
+            const notificationMessage =
+                `— Статус модерации:\n` +
+                `${botSeller?.isChannel ? 'Канал' : 'Бот'} ${botSeller.link}\n\n` +
+                `Ваша заявка была отклонена.`;
+
+            await this.sendNotification(botSellerOwnerTelegramId, notificationMessage);
+
+            await this.telegramService.notifyUser(botSellerOwnerTelegramId, notificationMessage);
+
             return true;
         } catch (error) {
             console.error('Error rejecting bot seller application:', error);
@@ -550,6 +622,22 @@ export class ApplicationsService {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
+
+            const botSeller = await this.botSellersService.findOne(Number(botSellerId));
+            if (!botSeller) {
+                console.error(`Bot seller with ID ${botSellerId} not found`);
+                await ctx.answerCbQuery('Бот не найден в базе данных');
+                return false;
+            }
+            const botSellerOwnerTelegramId = await this.botSellersService.getBotSellerOwnerTelegramId(Number(botSellerId));
+            const notificationMessage =
+                `— Статус модерации:\n` +
+                `${botSeller?.isChannel ? 'Канал' : 'Бот'} ${botSeller.link}\n\n` +
+                `Ваша заявка была отправлена в ожидание.`;
+
+            await this.sendNotification(botSellerOwnerTelegramId, notificationMessage);
+
+            await this.telegramService.notifyUser(botSellerOwnerTelegramId, notificationMessage);
 
             return true;
         } catch (error) {
@@ -643,6 +731,12 @@ export class ApplicationsService {
             // Получаем обновленную информацию о боте
             const botSeller = await this.botSellersService.findOne(Number(botSellerId));
 
+            if (!botSeller) {
+                console.error(`Bot seller with ID ${botSellerId} not found`);
+                await ctx.answerCbQuery('Бот не найден в базе данных');
+                return false;
+            }
+
             // Отправляем обновленное сообщение заявки
             await this.sendBotSellerApplication(botSeller);
 
@@ -672,8 +766,15 @@ export class ApplicationsService {
             // Получаем обновленную информацию о боте
             const botSeller = await this.botSellersService.findOne(Number(botSellerId));
 
+            if (!botSeller) {
+                console.error(`Bot seller with ID ${botSellerId} not found`);
+                await ctx.answerCbQuery('Бот не найден в базе данных');
+                return false;
+            }
+
             // Отправляем обновленное сообщение заявки
             await this.sendBotSellerApplication(botSeller);
+            
 
             // Удаляем текущее сообщение с меню категорий
             await ctx.deleteMessage();
@@ -759,7 +860,7 @@ export class ApplicationsService {
             const mailing = reservation.mailing;
             let postMessage = `📝 **Пост рассылки #${mailing.id}**\n\n`;
             postMessage += `**Контент:**\n${mailing.postContent}\n\n`;
-            
+
             if (mailing.postButtons) {
                 postMessage += `**Кнопки:**\n${mailing.postButtons}\n\n`;
             }
@@ -848,7 +949,7 @@ export class ApplicationsService {
                 statsMessage = await this.statsService.formatChannelStatistics(channelStats);
             } else {
                 const botStats = await this.statsService.getBotStatistics(Number(reservationId));
-                statsMessage = await this.statsService.formatBotStatistics(botStats);
+                statsMessage = await this.statsService.formatBotStatistics(botStats, Number(reservationId));
             }
 
             // Send statistics to admin privately via Telegram Bot API
@@ -870,7 +971,7 @@ export class ApplicationsService {
             console.error('Error getting statistics:', error);
             await ctx.answerCbQuery('Ошибка при получении статистики');
         }
-    }    
+    }
     private async handleConfirmApprove(ctx: Context) {
         try {
             const reservationId = this.extractReservationId(ctx);
@@ -912,11 +1013,11 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
         } catch (error) {
             console.error('Error confirming approval:', error);
             await ctx.answerCbQuery(`Ошибка при одобрении: ${error.message}`);
-            
+
             // Restore original keyboard on error
             await this.restoreOriginalKeyboard(ctx, this.extractReservationId(ctx));
         }
-    }    private async handleConfirmFreeze(ctx: Context) {
+    } private async handleConfirmFreeze(ctx: Context) {
         try {
             const reservationId = this.extractReservationId(ctx);
             console.log(`Confirming freeze for reservation: ${reservationId}`);
@@ -953,7 +1054,7 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
         } catch (error) {
             console.error('Error confirming freeze:', error);
             await ctx.answerCbQuery(`Ошибка при заморозке: ${error.message}`);
-            
+
             // Restore original keyboard on error
             await this.restoreOriginalKeyboard(ctx, this.extractReservationId(ctx));
         }
@@ -971,7 +1072,7 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
             console.error('Error cancelling action:', error);
             await ctx.answerCbQuery('Ошибка при отмене действия');
         }
-    }    private async restoreOriginalKeyboard(ctx: Context, reservationId: string) {
+    } private async restoreOriginalKeyboard(ctx: Context, reservationId: string) {
         const originalKeyboard = {
             inline_keyboard: [
                 [
@@ -995,34 +1096,27 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
         try {
             // Уведомление заказчику (владельцу рассылки)
             const customerMessage = `
-✅ **ВАША РЕКЛАМА ОДОБРЕНА И ОПЛАЧЕНА**
+ — Итоги рассылки:
 
-🆔 **ID рассылки:** #${reservation.mailingId}
-💰 **Списано с баланса:** ${paymentResult.totalPayment}р
-📊 **Переходов зафиксировано:** ${paymentResult.entranceCount}
-🔒 **Было в холде:** ${paymentResult.originalHold}р
-${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentResult.additionalCharge}р` : ''}
+ **Списано с баланса:** ${paymentResult.totalPayment}$
+ **Показов зафиксировано:** ${paymentResult.entranceCount}
+ **Было в холде:** ${paymentResult.originalHold}$
+${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentResult.additionalCharge}$` : ''}
 
-📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
-🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
-
-Спасибо за использование нашего сервиса! 🚀
+ **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+ **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
             `;
 
             // Уведомление исполнителю (владельцу бота)
             const sellerMessage = `
-💰 **ОПЛАТА ЗА РЕКЛАМУ ЗАЧИСЛЕНА**
+— Оплата за рассылку:
 
-🆔 **ID рассылки:** #${reservation.mailingId}
-💵 **Зачислено на баланс:** ${paymentResult.sellerAmount}$
-📊 **Переходов:** ${paymentResult.entranceCount}
+**Зачислено на баланс:** ${paymentResult.sellerAmount}$
+**Показов зафиксировано:** ${paymentResult.entranceCount}
 
-📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
-🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
-👤 **Заказчик:** @${reservation.mailing.user.username || 'неизвестно'}
-
-Отличная работа! Продолжайте зарабатывать с нами! 💪
-            `;
+**Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+**Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
+`;
 
             // Отправляем уведомления через Telegram Bot API
             await fetch(apiUrl, {
@@ -1044,6 +1138,7 @@ ${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentRe
                 })
             });
 
+
             console.log(`Approval notifications sent for reservation ${reservation.id}`);
         } catch (error) {
             console.error('Error sending approval notifications:', error);
@@ -1057,15 +1152,13 @@ ${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentRe
         try {
             // Уведомление заказчику (владельцу рассылки)
             const customerMessage = `
-❄️ **ВАША РЕКЛАМА ЗАМОРОЖЕНА**
+ **ВАША РЕКЛАМА ЗАМОРОЖЕНА**
 
-🆔 **ID рассылки:** #${reservation.mailingId}
-📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
-🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
+**Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+**Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
 
 **Причина:** ${reason}
-
-💰 **Деньги не списаны** и остаются в холде до решения администрации.
+**Деньги не списаны** и остаются в холде до решения администрации.
 
 Администрация рассмотрит вашу рекламу дополнительно. Ожидайте решения.
             `;
@@ -1074,10 +1167,8 @@ ${paymentResult.additionalCharge > 0 ? `💳 **Доплачено:** ${paymentRe
             const sellerMessage = `
 ❄️ **РЕКЛАМА ЗАМОРОЖЕНА**
 
-🆔 **ID рассылки:** #${reservation.mailingId}
-📅 **Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
-🎯 **Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
-👤 **Заказчик:** @${reservation.mailing.user.username || 'неизвестно'}
+**Дата рассылки:** ${reservation.date.toLocaleDateString('ru-RU')}
+**Тип рекламы:** ${reservation.botSeller.isChannel ? 'Канал' : 'Бот'}
 
 **Причина:** ${reason}
 

@@ -18,7 +18,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('mailings')
 @Controller('mailings')
-@UseGuards(JwtAuthGuard)
+// @UseGuards(JwtAuthGuard)
 export class MailingController {
         constructor(
             private readonly mailingService: MailingService,

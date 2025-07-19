@@ -413,4 +413,46 @@ export class ReservationService {
 
         return updatedReservation;
     }
+
+    async createQueueRecord(reservationId: number, queueName: string, totalUsers: number) {
+    return this.prismaService.reservationQueue.create({
+        data: {
+            mailingReservationId: reservationId,
+            queueName,
+            totalUsers,
+        },
+    });
+}
+
+async incrementQueueSent(queueName: string, count: number) {
+    return this.prismaService.reservationQueue.updateMany({
+        where: { queueName },
+        data: {
+            sentCount: { increment: count },
+            updatedAt: new Date(),
+        },
+    });
+}
+
+async incrementQueueFailed(queueName: string, count: number) {
+    this.logger.log(`Incrementing failed count for queue ${queueName} by ${count}`);
+    return this.prismaService.reservationQueue.updateMany({
+        where: { queueName },
+        data: {
+            failedCount: { increment: count },
+            updatedAt: new Date(),
+        },
+    });
+}
+
+async completeQueue(queueName: string) {
+    return this.prismaService.reservationQueue.updateMany({
+        where: { queueName },
+        data: {
+            status: 'COMPLETED',
+            updatedAt: new Date(),
+        },
+    });
+}
+
 }

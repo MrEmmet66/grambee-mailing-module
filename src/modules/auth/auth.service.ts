@@ -31,7 +31,7 @@ export class AuthService {
     });
     // Генерируем токены
     const tokens = await this.generateTokens(user);
-    await this.authRepository.saveRefreshToken(user.id, tokens.refreshToken);
+    await this.authRepository.saveRefreshToken(Number(registerDto.telegramId), tokens.refreshToken);
     return { user, ...tokens };
   }
 

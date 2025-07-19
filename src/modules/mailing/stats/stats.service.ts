@@ -11,12 +11,14 @@ import {
     MonthlyUserStatistics,
     MonthlySellerStatistics
 } from "./stats.types";
+import { ProcessorService } from "../services/processor.service";
 
 @Injectable()
 export class StatsService {
     constructor(
         private readonly prisma: PrismaService,
-        private readonly configService: ConfigService
+        private readonly configService: ConfigService,
+        private readonly processorService: ProcessorService
     ) { } private sumViewCount(reservations: any[]): number {
         return reservations.reduce((sum, r) => sum + (r.viewCount || 0), 0);
     }
@@ -126,13 +128,25 @@ export class StatsService {
             where: { id: mailingReservationId },
             include: { botSeller: true, mailing: true }
         });
+        const queue = await this.prisma.reservationQueue.findFirst({
+            where: { mailingReservationId: mailingReservationId }
+        });
+        if (!queue) throw new NotFoundException('Reservation queue not found');
         if (!reservation) throw new NotFoundException('Mailing reservation not found');
+
         return {
             totalClicks: reservation.viewCount || 0,
             uniqueClicks: reservation.viewCount || 0,
             userStats: { new: 0, dead: 0, premium: 0, rtl: 0 },
             conversionStats: { performedActions: 0, passedSponsors: 0, leftAfterStart: 0 },
-            audienceAnalysis: {}
+            audienceAnalysis: {},
+            totalSent: queue.sentCount || 0,
+            totalFailed: queue.failedCount || 0,
+            totalUsers: queue.totalUsers || 0,
+            averageSpeed: await this.processorService.getAverageQueueSpeed(queue.queueName) || 0,
+            queueStart: queue.createdAt,
+            queueEnd: queue.updatedAt || new Date(),
+
         };
     }
 
@@ -220,8 +234,52 @@ export class StatsService {
         return parseFloat((totalEarnings / daysDifference).toFixed(2));
     }
 
-    async formatBotStatistics(stats: BotStatistics): Promise<string> {
+    async formatBotStatistics(stats: BotStatistics, reservationId: number): Promise<string> {
         const total = stats.totalClicks;
+        const estimatedDateTime = stats.queueEnd ? new Date(stats.queueEnd.getTime() + (stats.totalUsers / stats.averageSpeed) * 1000).toLocaleString() : 'N/A';
+
+        // Получаем базовую статистику по памяти и CPU
+        const mem = process.memoryUsage();
+        const cpu = process.cpuUsage();
+        const memMb = (mem.rss / 1024 / 1024).toFixed(2);
+        const heapUsedMb = (mem.heapUsed / 1024 / 1024).toFixed(2);
+        const heapTotalMb = (mem.heapTotal / 1024 / 1024).toFixed(2);
+        const cpuUserMs = (cpu.user / 1000).toFixed(0);
+        const cpuSystemMs = (cpu.system / 1000).toFixed(0);
+        const queueName = `mailing_${reservationId || ''}`;
+        const floodWaitHistory = this.processorService?.getQueueFloodwaitHistory(queueName) || [];
+
+        // Метрики очереди и Redis
+        let queueStats = '';
+        try {
+            // Получаем имя очереди (по соглашению)
+            
+
+            // Получаем очередь через ProcessorService (если реализовано)
+            const queue = this.processorService?.getQueueByName(queueName);
+
+            if (queue) {
+                const counts = await queue.getJobCounts();
+                queueStats += `\nОчередь: ${queueName}`;
+                queueStats += `\n  waiting: ${counts.waiting}`;
+                queueStats += `\n  active: ${counts.active}`;
+                queueStats += `\n  completed: ${counts.completed}`;
+                queueStats += `\n  failed: ${counts.failed}`;
+                queueStats += `\n  delayed: ${counts.delayed}`;
+                // Redis info
+                const redisInfo = await queue.client.info();
+                // Парсим used_memory и connected_clients
+                const usedMemory = redisInfo.match(/used_memory:(\d+)/)?.[1];
+                const connectedClients = redisInfo.match(/connected_clients:(\d+)/)?.[1];
+                if (usedMemory && connectedClients) {
+                    queueStats += `\nRedis: used_memory: ${(Number(usedMemory)/1024/1024).toFixed(2)} MB, connected_clients: ${connectedClients}`;
+                }
+            } else {
+                queueStats += '\nОчередь завершена или неактивна';
+            }
+        } catch (err) {
+            queueStats += `\n(Не удалось получить метрики очереди/Redis)`;
+        }
 
         return `
 🤖 Статистика бота
@@ -240,11 +298,29 @@ export class StatsService {
 ├Прошли спонсоров: ${stats.conversionStats.passedSponsors} (${this.getPercentage(stats.conversionStats.passedSponsors, total)})
 └Ушли после старта: ${stats.conversionStats.leftAfterStart} (${this.getPercentage(stats.conversionStats.leftAfterStart, total)})
 
-🌍 Анализ аудитории
-${Object.entries(stats.audienceAnalysis)
-                .map(([country, data]) => `${country} ${data.count} чел. (${data.percentage.toFixed(2)}%)`)
-                .join('\n')}
-        `.trim();
+✉️Статистика рассылки:
+Всего пользователей: ${stats.totalUsers}
+Всего отправлено: ${stats.totalSent}
+Всего неудачно: ${stats.totalFailed}
+⏱️ Средняя скорость рассылки: ${stats.averageSpeed.toFixed(2)} сообщений/сек
+⏱️ Заданная Скорость рассылки: ${this.processorService.getQueueCurrentSpeed(queueName).toFixed(2)} сообщений/сек
+⏱️ Сообщений за 5 секунд: ${this.processorService.getQueueActualSpeed(queueName).toFixed(2)} сообщений/5 сек
+
+🕒 Время начала очереди: ${stats.queueStart.toString()}
+🕔 Время окончания очереди: ${stats.queueEnd.toString()}
+🕓 Оценочное время завершения: ${estimatedDateTime.toString()}
+
+📊 Использование ресурсов сервера:
+Память RSS: ${memMb} MB
+Heap Used: ${heapUsedMb} MB / ${heapTotalMb} MB
+CPU: user ${cpuUserMs} ms, system ${cpuSystemMs} ms
+
+${queueStats}
+
+📈 FLOOD_WAIT история:
+${floodWaitHistory.map(event => `- ${new Date(event.timestamp).toLocaleString()}: ${event.retryAfter} сек`).join('\n')}
+
+        `
     }
 
     async formatChannelStatistics(stats: ChannelStatistics): Promise<string> {

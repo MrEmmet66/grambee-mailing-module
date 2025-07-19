@@ -7,10 +7,12 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "4000:3000"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/mailing_db?schema=public
+      - NODE_OPTIONS=--max-old-space-size=4096 --max-semi-space-size=128 --dns-result-order=ipv4first
+      - UV_THREADPOOL_SIZE=128
     depends_on:
       - postgres
     networks:
@@ -24,6 +26,10 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+      - 208.67.222.222
+    # Системные настройки для оптимизации сетевых соединений (только поддерживаемые)
+    sysctls:
+      - net.core.somaxconn=65535
 
   postgres:
     container_name: postgres
@@ -33,7 +39,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: mailing_db
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -60,11 +66,14 @@ services:
   redis:
     image: redis:7
     container_name: redis
-    ports:
-      - "6379:6379"
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save "" --appendonly no --tcp-keepalive 60 --timeout 0 --databases 16 --maxclients 10000 --protected-mode no
+    # ports:
+    #   - "6379:6379"
     networks:
       - app-network
     restart: unless-stopped
+    sysctls:
+      - net.core.somaxconn=65535
 
   telethon-api:
     container_name: telethon-api

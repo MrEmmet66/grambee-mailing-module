@@ -52,7 +52,7 @@ export class StatsController {
     @Get('reservation/:reservationId/bot')
     async getBotStatistics(@Param('reservationId', ParseIntPipe) reservationId: number): Promise<{ raw: BotStatistics; formatted: string }> {
         const stats = await this.statsService.getBotStatistics(reservationId);
-        const formatted = await this.statsService.formatBotStatistics(stats);
+        const formatted = await this.statsService.formatBotStatistics(stats, reservationId);
         
         return {
             raw: stats,

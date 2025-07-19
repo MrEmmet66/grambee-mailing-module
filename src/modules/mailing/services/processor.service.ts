@@ -10,7 +10,7 @@ import { MailingNotifyProps } from 'src/modules/telegram/telegram.types';
 import * as fs from 'fs';
 import * as readline from 'readline';
 import { setTimeout } from 'timers/promises';
-import { MailingQueueWorker } from './mailing-queue.processor';
+import { FloodWaitEvent, MailingQueueWorker } from './mailing-queue.processor';
 import * as Bull from 'bull';
 import { BotSeller, Mailing, MailingReservation } from '@prisma/client';
 
@@ -18,6 +18,7 @@ import { BotSeller, Mailing, MailingReservation } from '@prisma/client';
 export class ProcessorService {
     private readonly logger = new Logger(ProcessorService.name);
     private mailingWorkers: Record<string, boolean> = {};
+    private queues: Record<string, Bull.Queue> = {};
     constructor(
         private readonly prismaService: PrismaService,
         @Inject(forwardRef(() => ApplicationsService))
@@ -31,7 +32,7 @@ export class ProcessorService {
         private readonly mailingQueueWorker: MailingQueueWorker,
         @Inject(forwardRef(() => require('./mailing.service').MailingService))
         private readonly mailingService: any,
-    ) {}
+    ) { }
 
     async processMailing(reservation: MailingReservation) {
         const mailing = await this.prismaService.mailing.findUnique({
@@ -62,16 +63,16 @@ export class ProcessorService {
         } else {
             await this.sendToBotUsers(botSeller, mailing, inlineKeyboard, reservation.id);
         }
-        await this.prismaService.mailingReservation.update({
-            where: { id: reservation.id },
-            data: {
-                isProcessed: true,
-                processedAt: new Date(),
-                adminApprovalStatus: 'PENDING',
-            }
-        });
-        await this.updateMailingStatistics(botSeller, mailing);
-        const completedMailing = await this.reservationService.checkAndDeactivateMailing(mailing.id);
+        // await this.prismaService.mailingReservation.update({
+        //     where: { id: reservation.id },
+        //     data: {
+        //         isProcessed: true,
+        //         processedAt: new Date(),
+        //         adminApprovalStatus: 'PENDING',
+        //     }
+        // });
+        // await this.updateMailingStatistics(botSeller, mailing);
+        // const completedMailing = await this.reservationService.checkAndDeactivateMailing(mailing.id);
         const props: MailingNotifyProps = {
             isChannel: botSeller.isChannel,
             paymentType: targetBot?.paymentType || 'fixed',
@@ -126,7 +127,7 @@ export class ProcessorService {
                     }
                 } else {
                     let errorBody = '';
-                    try { errorBody = await response.text(); } catch {}
+                    try { errorBody = await response.text(); } catch { }
                     this.logger.warn('Failed to forward message to admin chat', { status: response.status, body: errorBody });
                 }
             }
@@ -137,59 +138,95 @@ export class ProcessorService {
     }
 
     async sendToBotUsers(botSeller: BotSeller, mailing: Mailing, buttons, reservationId?: number) {
+
         if (!botSeller.statisticsFilePath) {
             this.logger.warn(`No statistics file for bot ${botSeller.id}, skipping`);
             return;
         }
         try {
             const filePath = process.cwd() + botSeller.statisticsFilePath;
-            this.logger.log(`Reading user statistics from ${filePath}`);
             if (!fs.existsSync(filePath)) {
                 this.logger.error(`Statistics file ${filePath} does not exist`);
                 return;
             }
             const userList = await this.readUserList(filePath);
-            this.logger.log(`Queueing ${userList.length} users of bot ${botSeller.id} for mailing`);
-            const queueName = `mailing_${mailing.id}`;
-            // Запуск воркера для этой рассылки (один раз)
-            if (!this.mailingWorkers[queueName]) {
-                const redisConfig = {
-                    host: this.configService.get('REDIS_HOST', 'localhost'),
-                    port: parseInt(this.configService.get('REDIS_PORT', '6379'), 10),
-                    password: this.configService.get('REDIS_PASSWORD', undefined),
-                };
-                this.mailingQueueWorker.startWorker(queueName, redisConfig, reservationId);
-                this.mailingWorkers[queueName] = true;
+            if (userList.length === 0) {
+                this.logger.warn(`No users found in statistics file ${filePath}`);
+                return;
             }
-            // Добавление задач в очередь
-            const queue = new Bull(queueName, {
-                redis: {
-                    host: this.configService.get('REDIS_HOST', 'localhost'),
-                    port: parseInt(this.configService.get('REDIS_PORT', '6379'), 10),
-                    password: this.configService.get('REDIS_PASSWORD', undefined),
-                },
-                limiter: { max: 25, duration: 1000 },
-            });
-            const inlineKeyboard = this.telegramService.buildInlineKeyboard(buttons);
-            for (const user of userList) {
-                await queue.add({
+            const totalUsers = userList.length;
+            this.logger.log(`Queueing ${totalUsers} users of bot ${botSeller.id} for mailing`);
+
+            // Новый простой способ: отправляем рассылку в админ-чат через TelegramService и получаем message_id
+            const adminChatId = this.configService.get('MAILINGS_CHAT_ID', '-1002677251791');
+            const botToken = this.configService.get('BOT_TOKEN', '');
+            let adminMessageId: number | undefined = undefined;
+            let sourceData: { chatId: string, messageId: number } | undefined = undefined;
+
+            const queueName = `mailing_${reservationId}`;
+            const redisConfig = {
+                host: this.configService.get('REDIS_HOST', 'localhost'),
+                port: parseInt(this.configService.get('REDIS_PORT', '6379'), 10),
+                // Только добавляем пароль если он действительно задан
+                ...(this.configService.get('REDIS_PASSWORD') ? { password: this.configService.get('REDIS_PASSWORD') } : {}),
+            };
+
+            // Запускаем или получаем очередь (только один раз)
+            const queue = await this.mailingQueueWorker.startWorker(queueName, redisConfig, reservationId, totalUsers);
+            await queue.empty();
+
+            // Подготавливаем все jobs заранее, добавляем sourceData если есть
+            console.log(`[ProcessorService] sourceData before creating jobs:`, sourceData);
+            console.log(`[ProcessorService] sourceData type:`, typeof sourceData);
+            console.log(`[ProcessorService] sourceData JSON:`, JSON.stringify(sourceData, null, 2));
+
+            const jobs = userList.map(user => {
+                const jobData: any = {
                     botToken: botSeller.botToken,
                     chatId: user.userId,
                     text: mailing.postContent,
-                    inlineKeyboard,
-                    mailing,
+                    inlineKeyboard: buttons,
                     isMedia: !!mailing.postMedia,
                     isChannel: mailing.isChannel,
-                    reservationId: reservationId
-                });
-            }
+                    reservationId
+                };
+                // If media is present, add media fields
+                if (mailing.postMedia) {
+                    jobData.postMedia = mailing.postMedia;
+                    // Преобразуем 'image' в 'photo' для Telegram API
+                    let mediaType = mailing.postMediaType;
+                    if (mediaType === 'image') mediaType = 'photo';
+                    jobData.postMediaType = mediaType || 'photo';
+                }
+                // Логируем только первый job
+                if (user === userList[0]) {
+                    console.log(`[ProcessorService] Creating first job with data:`, JSON.stringify(jobData, null, 2));
+                }
+                return jobData;
+            });
             
+            // Добавляем jobs БЕЗ имени, чтобы они обрабатывались default процессором
+            const addJobsPromises = jobs.map(jobData => {
+                return queue.add(jobData, {
+                    removeOnComplete: 50,
+                    removeOnFail: 50,
+                    attempts: 3,
+                });
+            });
+            await Promise.all(addJobsPromises);
+            console.log(`[ProcessorService] Successfully added all ${jobs.length} jobs to queue ${queueName}`);
+
+            // Уведомляем worker о количестве добавленных jobs
+            await this.mailingQueueWorker.addJobsToQueue(queueName, jobs.length);
+
+            this.logger.log(`Successfully queued ${jobs.length} jobs for bot seller ${botSeller.id} and mailing ${mailing.id}`);
             this.logger.log(`Queued mailing for bot seller ${botSeller.id} and mailing ${mailing.id}`);
         } catch (error) {
             this.logger.error(`Error queueing messages to bot users:`, error);
             throw error;
         }
     }
+
 
     async readUserList(filePath: string): Promise<Array<{ userId: string, lang?: string }>> {
         const users: Array<{ userId: string, lang?: string }> = [];
@@ -229,6 +266,8 @@ export class ProcessorService {
         }
         return undefined;
     }
+
+
 
     async sendTextMessage(botToken, chatId, text, inlineKeyboard) {
         const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
@@ -295,7 +334,7 @@ export class ProcessorService {
             }
             const mediaField = mediaType.toLowerCase() === 'photo' ? 'photo' :
                 mediaType.toLowerCase() === 'video' ? 'video' :
-                mediaType.toLowerCase() === 'audio' ? 'audio' : 'document';
+                    mediaType.toLowerCase() === 'audio' ? 'audio' : 'document';
             formData.append(mediaField, fs.createReadStream(mediaUrl));
             const response = await this.httpService.axiosRef({
                 method: 'POST',
@@ -409,6 +448,31 @@ export class ProcessorService {
         }
     }
 
+    async getAverageQueueSpeed(queueName: string): Promise<number> {
+        const queue = await this.prismaService.reservationQueue.findFirst({
+            where: { queueName }
+        });
+        if (!queue) {
+            this.logger.warn(`Queue ${queueName} not found`);
+            return 0;
+        }
+
+        const durationSeconds = ((queue.updatedAt.getTime() || Date.now()) - queue.createdAt.getTime()) / 1000;
+        if (durationSeconds <= 0) {
+            this.logger.warn(`Queue ${queueName} has invalid duration: ${durationSeconds} seconds`);
+            return 0;
+        }
+
+        const totalProcessed = queue.sentCount + queue.failedCount;
+        if (totalProcessed === 0) {
+            return 0;
+        }
+
+        // Возвращаем скорость в msg/sec
+        const messagesPerSecond = totalProcessed / durationSeconds;
+        return Math.round(messagesPerSecond * 100) / 100; // Округляем до 2 знаков после запятой
+    }
+
     /**
      * Получить количество успешно отправленных сообщений для рассылки
      * @param mailingId ID рассылки
@@ -416,6 +480,55 @@ export class ProcessorService {
     getSuccessfullySent(mailingId: number): number {
         const queueName = `mailing_${mailingId}`;
         return this.mailingQueueWorker.getSuccessfullySent(queueName);
+    }
+
+    getQueueByName(queueName: string): Bull.Queue | undefined {
+        // Проксируем к воркеру, чтобы всегда получать актуальную очередь
+        return this.mailingQueueWorker.getQueueByName(queueName);
+    }
+
+    getQueueFloodwaitHistory(queueName: string): FloodWaitEvent[] {
+        return this.mailingQueueWorker.getFloodWaitHistory(queueName);
+    }
+
+    getQueueCurrentSpeed(queueName: string): number {
+        return this.mailingQueueWorker.getCurrentSpeed(queueName);
+    }
+
+    getQueueActualSpeed(queueName: string): number {
+        return this.mailingQueueWorker.getAverageProcessingSpeed(queueName, 5);
+    }
+
+    /**
+     * Получить фактическую скорость обработки за последнюю секунду
+     */
+    getQueueLastSecondSpeed(queueName: string): number {
+        return this.mailingQueueWorker.getActualProcessingSpeed(queueName);
+    }
+
+    /**
+     * Получить детальную диагностику скорости очереди
+     */
+    getQueueSpeedDiagnostics(queueName: string): {
+        currentSpeed: number;
+        actualSpeed: number;
+        averageSpeed: number;
+        limiterSettings?: any;
+    } {
+        const queue = this.mailingQueueWorker.getQueueByName(queueName);
+        return {
+            currentSpeed: this.mailingQueueWorker.getCurrentSpeed(queueName),
+            actualSpeed: this.mailingQueueWorker.getActualProcessingSpeed(queueName),
+            averageSpeed: this.mailingQueueWorker.getAverageProcessingSpeed(queueName, 10),
+            limiterSettings: queue ? (queue as any).opts?.limiter : undefined
+        };
+    }
+
+    /**
+     * Получить общую статистику всех очередей
+     */
+    getAllQueuesStats() {
+        return this.mailingQueueWorker.getAllQueuesStats();
     }
 
     // Методы, связанные с обработкой и отправкой рассылок, будут перенесены сюда из MailingService

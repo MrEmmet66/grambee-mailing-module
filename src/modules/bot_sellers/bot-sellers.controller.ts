@@ -10,7 +10,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('Bot Sellers')
 @Controller('bot-sellers')
-@UseGuards(JwtAuthGuard)
+// @UseGuards(JwtAuthGuard)
 export class BotSellersController {
   constructor(private readonly botSellersService: BotSellersService,
               private readonly configService: ConfigService
@@ -41,7 +41,7 @@ export class BotSellersController {
         callback(null, true);
       },
       limits: {
-        fileSize: 5 * 1024 * 1024,
+        fileSize: 20 * 1024 * 1024,
       }
     }),
   )
@@ -94,8 +94,9 @@ export class BotSellersController {
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
     @Query('search') search: string = '',
+    @Query('category') categories?: string
   ) {
-    return this.botSellersService.findAllPaged(page, limit, search);
+    return this.botSellersService.findAllPaged(page, limit, search, categories);
   }
 
 
