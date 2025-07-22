@@ -1,0 +1,29 @@
+# Игнорируемые файлы для Docker
+.git
+.gitignore
+README.md
+.env
+.env.example
+*.md
+.dockerignore
+
+# Go специфичные файлы
+*.log
+vendor/
+coverage.txt
+coverage.html
+
+# Временные файлы
+tmp/
+temp/
+.tmp/
+
+# IDE файлы
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS файлы
+.DS_Store
+Thumbs.db

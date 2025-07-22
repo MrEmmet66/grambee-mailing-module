@@ -143,86 +143,66 @@ export class ProcessorService {
             this.logger.warn(`No statistics file for bot ${botSeller.id}, skipping`);
             return;
         }
+        
         try {
-            const filePath = process.cwd() + botSeller.statisticsFilePath;
-            if (!fs.existsSync(filePath)) {
-                this.logger.error(`Statistics file ${filePath} does not exist`);
-                return;
-            }
-            const userList = await this.readUserList(filePath);
-            if (userList.length === 0) {
-                this.logger.warn(`No users found in statistics file ${filePath}`);
-                return;
-            }
-            const totalUsers = userList.length;
-            this.logger.log(`Queueing ${totalUsers} users of bot ${botSeller.id} for mailing`);
+            this.logger.log(`Processing mailing ${mailing.id} for bot ${botSeller.id} via Go worker`);
+            this.logger.log(`Using statistics file URL: ${botSeller.statisticsFilePath}`);
 
-            // Новый простой способ: отправляем рассылку в админ-чат через TelegramService и получаем message_id
-            const adminChatId = this.configService.get('MAILINGS_CHAT_ID', '-1002677251791');
-            const botToken = this.configService.get('BOT_TOKEN', '');
-            let adminMessageId: number | undefined = undefined;
-            let sourceData: { chatId: string, messageId: number } | undefined = undefined;
-
-            const queueName = `mailing_${reservationId}`;
-            const redisConfig = {
-                host: this.configService.get('REDIS_HOST', 'localhost'),
-                port: parseInt(this.configService.get('REDIS_PORT', '6379'), 10),
-                // Только добавляем пароль если он действительно задан
-                ...(this.configService.get('REDIS_PASSWORD') ? { password: this.configService.get('REDIS_PASSWORD') } : {}),
+            // Подготавливаем данные для отправки в Go микросервис
+            const mailingData = {
+                mailing_id: `${reservationId}_${mailing.id}`,
+                bot_token: botSeller.botToken,
+                users_file_url: botSeller.statisticsFilePath, // Публичный URL файла
+                message_data: {
+                    text: mailing.postContent || '',
+                    post_media: mailing.postMedia ? (process.cwd() + mailing.postMedia) : '',
+                    post_media_type: mailing.postMediaType === 'image' ? 'photo' : (mailing.postMediaType || 'photo'),
+                    post_content: mailing.postContent || ''
+                },
+                inline_keyboard: buttons,
+                rate_limit: 25, // 25 сообщений в секунду по умолчанию
+                admin_chat_id: this.configService.get('MAILINGS_CHAT_ID', '-1002677251791'),
+                admin_message_id: 0 // Будет установлено позже если нужно
             };
 
-            // Запускаем или получаем очередь (только один раз)
-            const queue = await this.mailingQueueWorker.startWorker(queueName, redisConfig, reservationId, totalUsers);
-            await queue.empty();
-
-            // Подготавливаем все jobs заранее, добавляем sourceData если есть
-            console.log(`[ProcessorService] sourceData before creating jobs:`, sourceData);
-            console.log(`[ProcessorService] sourceData type:`, typeof sourceData);
-            console.log(`[ProcessorService] sourceData JSON:`, JSON.stringify(sourceData, null, 2));
-
-            const jobs = userList.map(user => {
-                const jobData: any = {
-                    botToken: botSeller.botToken,
-                    chatId: user.userId,
-                    text: mailing.postContent,
-                    inlineKeyboard: buttons,
-                    isMedia: !!mailing.postMedia,
-                    isChannel: mailing.isChannel,
-                    reservationId
-                };
-                // If media is present, add media fields
-                if (mailing.postMedia) {
-                    jobData.postMedia = mailing.postMedia;
-                    // Преобразуем 'image' в 'photo' для Telegram API
-                    let mediaType = mailing.postMediaType;
-                    if (mediaType === 'image') mediaType = 'photo';
-                    jobData.postMediaType = mediaType || 'photo';
-                }
-                // Логируем только первый job
-                if (user === userList[0]) {
-                    console.log(`[ProcessorService] Creating first job with data:`, JSON.stringify(jobData, null, 2));
-                }
-                return jobData;
-            });
+            // Отправляем запрос в Go микросервис
+            const goWorkerUrl = this.configService.get('GO_MAILING_WORKER_URL', 'http://go-mailing-worker:8080');
             
-            // Добавляем jobs БЕЗ имени, чтобы они обрабатывались default процессором
-            const addJobsPromises = jobs.map(jobData => {
-                return queue.add(jobData, {
-                    removeOnComplete: 50,
-                    removeOnFail: 50,
-                    attempts: 3,
-                });
+            this.logger.log(`Sending mailing request to Go worker: ${goWorkerUrl}/api/v1/mailing`);
+            this.logger.debug(`Mailing data:`, mailingData);
+            
+            const response = await this.httpService.axiosRef.post(`${goWorkerUrl}/api/v1/mailing`, mailingData, {
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                timeout: 30000 // 30 секунд таймаут
             });
-            await Promise.all(addJobsPromises);
-            console.log(`[ProcessorService] Successfully added all ${jobs.length} jobs to queue ${queueName}`);
 
-            // Уведомляем worker о количестве добавленных jobs
-            await this.mailingQueueWorker.addJobsToQueue(queueName, jobs.length);
+            if (response.status === 200) {
+                this.logger.log(`Successfully submitted mailing to Go worker:`, response.data);
+                this.logger.log(`Mailing ${mailing.id} for bot ${botSeller.id} queued in Go worker with ${response.data.total_tasks} tasks`);
+                
+                // Обновляем статистику рассылки
+                // await this.updateMailingStatistics(botSeller, mailing);
+                
+                return {
+                    success: true,
+                    totalTasks: response.data.total_tasks,
+                    totalUsers: response.data.total_users,
+                    failedTasks: response.data.failed_tasks
+                };
+            } else {
+                throw new Error(`Go worker returned status ${response.status}: ${JSON.stringify(response.data)}`);
+            }
 
-            this.logger.log(`Successfully queued ${jobs.length} jobs for bot seller ${botSeller.id} and mailing ${mailing.id}`);
-            this.logger.log(`Queued mailing for bot seller ${botSeller.id} and mailing ${mailing.id}`);
         } catch (error) {
-            this.logger.error(`Error queueing messages to bot users:`, error);
+            this.logger.error(`Error sending mailing to Go worker:`, error);
+            if (error.response) {
+                this.logger.error(`Go worker response error:`, {
+                    status: error.response.status,
+                    data: error.response.data
+                });
+            }
             throw error;
         }
     }
@@ -522,13 +502,6 @@ export class ProcessorService {
             averageSpeed: this.mailingQueueWorker.getAverageProcessingSpeed(queueName, 10),
             limiterSettings: queue ? (queue as any).opts?.limiter : undefined
         };
-    }
-
-    /**
-     * Получить общую статистику всех очередей
-     */
-    getAllQueuesStats() {
-        return this.mailingQueueWorker.getAllQueuesStats();
     }
 
     // Методы, связанные с обработкой и отправкой рассылок, будут перенесены сюда из MailingService

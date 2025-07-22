@@ -4,13 +4,8 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
 import * as nodeCrypto from 'crypto';
 import { HttpExceptionFilter } from './filters/httpException.filter';
-// import { initDNSCache } from './dns-cache'; // ОТКЛЮЧЕНО для тестирования
 
 async function bootstrap() {
-  // ВРЕМЕННО ОТКЛЮЧЕНО: DNS кэш для диагностики независимых рассылок
-  console.log('[Bootstrap] DNS cache DISABLED for independent mailings testing...');
-  // await initDNSCache(); // ОТКЛЮЧЕНО
-  
   const app = await NestFactory.create(AppModule);
 
   app.useLogger(['error', 'warn', 'log', 'debug', 'verbose']);
