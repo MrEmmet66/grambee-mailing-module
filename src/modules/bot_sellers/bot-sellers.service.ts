@@ -8,7 +8,7 @@ import * as path from 'path';
 import * as readline from 'readline';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
-import { BotSeller, MailingTargetBots } from '@prisma/client';
+import { BotSeller, MailingTargetBots, User } from '@prisma/client';
 import { ApplicationsService } from '../telegram/applications.service';
 import { log } from 'console';
 
@@ -45,6 +45,71 @@ export class BotSellersService {
     return botSeller.user.telegramId;
   }
 
+  private async getChannelDataByLink(link: string): Promise<{ title: string; channelId: string; }> {
+    const botToken = this.configService.get<string>('MAIN_BOT', '');
+    // Определяем тип ссылки: приватная (invite) или публичная (username)
+    // Приватные обычно начинаются с https://t.me/joinchat или https://t.me/+ или имеют invite code
+    const isPrivate = /^https:\/\/t\.me\/(joinchat|\+|invite)/.test(link) || /\b(joinchat|invite|\+)/.test(link);
+    if (isPrivate) {
+      // Приватный канал — используем userbot API
+      return await this.getPrivateChannelDataByLink(link);
+    } else {
+      // Публичный канал — получаем username из ссылки
+      // Примеры: https://t.me/username, t.me/username, @username
+      let username = link;
+      // Удаляем https://t.me/ и t.me/ если есть
+      username = username.replace(/^https?:\/\/t\.me\//, '');
+      username = username.replace(/^t\.me\//, '');
+      // Удаляем @ если есть
+      username = username.replace(/^@/, '');
+      // Удаляем все после ? (например, параметры)
+      username = username.split('?')[0];
+      if (!username) {
+        throw new BadRequestException('Не удалось извлечь username из публичной ссылки');
+      }
+      try {
+        this.logger.log(`Fetching channel info for username: ${username}`);
+        const response = await axios.get(`https://api.telegram.org/bot${botToken}/getChat?chat_id=@${username}`);
+        if (response.data && response.data.ok && response.data.result) {
+          this.logger.log(`Telegram API response for getChat: ${JSON.stringify(response.data)}`);
+
+          return {
+            title: response.data.result.title || response.data.result.username || username,
+            channelId: String(response.data.result.id),
+          };
+        } else {
+          this.logger.warn(`Telegram API returned unexpected data: ${JSON.stringify(response.data)}`);
+          throw new BadRequestException('Telegram API не вернул корректную информацию о канале');
+        }
+      } catch (error: any) {
+        this.logger.error(`Telegram API error: ${error.message}`);
+        throw new BadRequestException('Не удалось получить данные о канале: ' + (error.response?.data?.description || error.message));
+      }
+    }
+  }
+
+  private async getPrivateChannelDataByLink(link: string): Promise<{ title: string; channelId: string; }> {
+    const userBotUrl = this.configService.get<string>('USERBOT_URL', 'https://api.grambee.net/userBotApi');
+    try {
+      // Формируем endpoint (например, /getChannelInfo)
+      const endpoint = userBotUrl.endsWith('/') ? userBotUrl + 'getChannelInfo' : userBotUrl + '/getChannelInfo';
+      this.logger.debug(`Requesting userbot API: ${endpoint} with link: ${link}`);
+      const response = await axios.post(endpoint, { inviteLink: link }, { timeout: 10000 });
+      if (response.data && response.data.channelId && response.data.title) {
+        return {
+          title: response.data.title,
+          channelId: response.data.channelId,
+        };
+      } else {
+        this.logger.warn(`Userbot API returned unexpected data: ${JSON.stringify(response.data)}`);
+        throw new BadRequestException('Не удалось получить данные о канале');
+      }
+    } catch (error: any) {
+      this.logger.error(`Userbot API error: ${error.message}`);
+      throw new BadRequestException('Не удалось получить данные о канале: ' + (error.response?.data?.error || error.message));
+    }
+  }
+
   async findByMailingId(mailingId: number) {
     return await this.prisma.botSeller.findMany({
       where: {
@@ -69,6 +134,19 @@ export class BotSellersService {
     return botTokenRegex.test(token);
   }
 
+  async getBotSellerOwner(botSellerId): Promise<User> {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+      include: { user: true }
+    });
+
+    if (!botSeller || !botSeller.user) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    return botSeller.user;
+  }
+
   private async validateStatisticsFile(filePath: string): Promise<number> {
     return new Promise((resolve, reject) => {
       const fileStream = fs.createReadStream(filePath);
@@ -85,25 +163,27 @@ export class BotSellersService {
         lineNumber++;
         const trimmedLine = line.trim();
         if (!trimmedLine) return;
-        userCount++;
-        console.log(`Processing line ${lineNumber}: "${trimmedLine}"`);
-        
-        const telegramId = trimmedLine.includes(':') ? trimmedLine.split(':')[0] : trimmedLine;
-        if (!/^\d+$/.test(telegramId)) {
-          isValid = false;
-          rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
-          return;
-        }
-        if (telegramId.length < 9 || telegramId.length > 10) {
-          isValid = false;
-          rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
-          return;
-        }
 
-        console.log(`Valid Telegram ID at line ${lineNumber}: "${telegramId}"`);
-        
+        // Разделяем строку по любому из разделителей: , | пробел
+        const parts = trimmedLine.split(/[,|\s]+/);
+        for (const part of parts) {
+          if (!part) continue;
+          // Если есть двоеточие, берем только до него
+          const telegramId = part.includes(':') ? part.split(':')[0] : part;
+          if (!/^\d+$/.test(telegramId)) {
+            isValid = false;
+            rl.close();
+            reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
+            return;
+          }
+          if (telegramId.length < 9 || telegramId.length > 10) {
+            isValid = false;
+            rl.close();
+            reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
+            return;
+          }
+          userCount++;
+        }
       });
 
       rl.on('close', () => {
@@ -345,9 +425,9 @@ export class BotSellersService {
           
           // ✅ Проверяем botToken только если он действительно передан и isChannel = false
           ...(createBotSellerDto.isChannel === false && createBotSellerDto.botToken ? [{ botToken: createBotSellerDto.botToken }] : []),
-          // ✅ Проверяем channelId только если он действительно передан и isChannel = true
-          ...(createBotSellerDto.isChannel === true && createBotSellerDto.channelId ? [{
-            channelId: createBotSellerDto.channelId,
+          // ✅ Проверяем link только если он действительно передан и isChannel = true
+          ...(createBotSellerDto.isChannel === true && createBotSellerDto.link ? [{
+            link: createBotSellerDto.link,
             isChannel: true
           }] : [])
         ]
@@ -358,7 +438,7 @@ export class BotSellersService {
 
 
     if (existingBot) {
-      throw new BadRequestException('A bot with this token or channel ID already exists');
+      throw new BadRequestException('A bot with this token or channel link already exists');
     }
     
 
@@ -371,14 +451,17 @@ export class BotSellersService {
     this.logger.debug(`Processed isChannel: ${isChannel}`);
 
     await this.getBotInfo(createBotSellerDto.botToken);
+    let channelData: { title: string; channelId: string } | null = null;
 
-    // Only validate channel access if isChannel is true and channelId is provided
+    // Only validate channel access if isChannel is true and link is provided
     if (isChannel) {
-      if (!createBotSellerDto.channelId) {
-        throw new BadRequestException('Channel ID is required when isChannel is true');
+      channelData = await this.getChannelDataByLink(createBotSellerDto.link);
+      if (!createBotSellerDto.link) {
+        throw new BadRequestException('Channel link is required when isChannel is true');
       }
+
       const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
-      await this.validateChannelAccess(mainBotToken, createBotSellerDto.channelId);
+      await this.validateChannelAccess(mainBotToken, channelData?.channelId);
     }
 
     const mau = await this.calculateMAU(createBotSellerDto.botToken);
@@ -398,7 +481,8 @@ export class BotSellersService {
       
       isChannel: isChannel, // Make sure to use the processed boolean value
       // Only set channelId if isChannel is true and channelId is provided
-      channelId: isChannel ? createBotSellerDto.channelId : null,
+      channelId: isChannel ? channelData?.channelId : null,
+      title: isChannel ? channelData?.title : null, // Set title only if it's a channel
     };
 
     // Remove telegramId and statisticsFile from data sent to Prisma as they're not in the BotSeller model

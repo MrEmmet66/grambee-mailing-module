@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"go-mailing-worker/internal/models"
 )
 
@@ -47,7 +49,7 @@ func (c *Client) SendTextMessage(chatID, text string, keyboard *models.InlineKey
 	payload := map[string]interface{}{
 		"chat_id":    chatID,
 		"text":       text,
-		"parse_mode": "HTML",
+		"parse_mode": "Markdown",
 	}
 
 	if keyboard != nil {
@@ -65,9 +67,6 @@ func (c *Client) SendMediaMessage(chatID string, messageData models.MessageData,
 	case "video":
 		endpoint = "sendVideo"
 		mediaField = "video"
-	case "document":
-		endpoint = "sendDocument"
-		mediaField = "document"
 	case "audio":
 		endpoint = "sendAudio"
 		mediaField = "audio"
@@ -100,7 +99,7 @@ func (c *Client) SendMediaMessage(chatID string, messageData models.MessageData,
 	// Добавляем caption если есть
 	if messageData.PostContent != "" {
 		writer.WriteField("caption", messageData.PostContent)
-		writer.WriteField("parse_mode", "HTML")
+		writer.WriteField("parse_mode", "Markdown")
 	}
 
 	// Добавляем клавиатуру если есть
@@ -191,12 +190,16 @@ func (c *Client) makeAPICall(url string, payload map[string]interface{}) error {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
+	// Логгируем только сырое тело ответа Telegram API
+	logrus.WithField("response", string(respBody)).Info("[TG] RAW RESPONSE")
+
 	var tgResp TelegramResponse
 	if err := json.Unmarshal(respBody, &tgResp); err != nil {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
-
-	if !tgResp.OK {
+	if tgResp.OK {
+		logrus.WithField("response", string(respBody)).Info("[TG] SUCCESS RESPONSE")
+	} else {
 		// Формируем подробное сообщение об ошибке
 		var errMsg strings.Builder
 		errMsg.WriteString("telegram API error")

@@ -100,6 +100,8 @@ export class ApplicationsService {
         const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "-1002677251791";
         const applicationsTopicId = this.configService.get<number>('MAILING_APPLICATIONS_TOPIC_ID') || 12;
 
+        const mailingOwner = await this.mailingService.getMailingOwner(mailing.id);
+
         const keyboardReplyMarkup = {
             inline_keyboard: [
                 [
@@ -147,11 +149,10 @@ export class ApplicationsService {
 
         const message =
             `<b>📨 НОВАЯ ЗАЯВКА НА РАССЫЛКУ</b>\n\n` +
-            `<b>👤 Пользователь:</b> #${mailing.userId}\n` +
+            `<b>👤 Пользователь:</b> @${mailingOwner.username}\n` +
             `<b>🎯 Тип цели:</b> ${targetType}\n` +
             `<b>🔗 Ссылка:</b> ${targetLink}\n` +
             `<b>📅 Дата создания:</b> ${new Date().toLocaleString('ru-RU')}\n` +
-            `<b>📊 Статус:</b> ${statusEmoji} ${mailing.status}\n\n` +
             `<b>📝 Контент:</b>\n<pre>${mailing.postContent}</pre>\n\n` +
             (mailing.postMedia ?
                 `<b>🖼 Медиа:</b> ${mailing.postMedia}\n` +
@@ -179,6 +180,7 @@ export class ApplicationsService {
         const applicationsTopicId = this.configService.get<number>('BOT_APPLICATIONS_TOPIC_ID') || 9;
 
         console.log(`Sending bot seller application to chat ${chatId}, topic ${applicationsTopicId}, bot id: ${botSeller.id}`);
+        const botSellerOwner = await this.botSellersService.getBotSellerOwner(botSeller.id);
 
         // Кнопки подтверждения/отклонения
         const keyboardReplyMarkup = {
@@ -267,12 +269,12 @@ export class ApplicationsService {
 
         const message =
             `<b>🤖 НОВАЯ ЗАЯВКА НА СОЗДАНИЕ БОТА</b>\n\n` +
-            `<b>👤 Пользователь:</b> #${botSeller.userId}\n` +
+            `<b>👤 Пользователь:</b> @${botSellerOwner.username}\n` +
             `<b>📅 Дата создания:</b> ${new Date(botSeller.createdAt).toLocaleString('ru-RU')}\n\n` +
             `<b>📝 Информация о боте:</b>\n` +
             `• <b>Описание:</b> ${botSeller.description || '<i>Не указано</i>'}\n` +
-            `• <b>Статус:</b> ${statusEmoji} ${botSeller.acceptStatus}\n` +
             `• <b>Категория:</b> ${categoryEmoji} ${getCategoryName(botSeller.category)}\n\n` +
+            `• <b>Цена:</b> ${statusEmoji} ${botSeller.fixedPrice}\n` +
             `<b>📊 Статистика:</b>\n` +
             `• <b>Активных пользователей:</b> ${botSeller.botLiveAudience || 0}\n` +
             `• <b>Активных в месяц:</b> ${botSeller.botMonthlyActiveUsers || 0}\n` +

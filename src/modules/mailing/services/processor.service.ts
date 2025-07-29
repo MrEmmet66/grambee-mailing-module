@@ -9,16 +9,11 @@ import { ReservationService } from './reservation.service';
 import { MailingNotifyProps } from 'src/modules/telegram/telegram.types';
 import * as fs from 'fs';
 import * as readline from 'readline';
-import { setTimeout } from 'timers/promises';
-import { FloodWaitEvent, MailingQueueWorker } from './mailing-queue.processor';
-import * as Bull from 'bull';
 import { BotSeller, Mailing, MailingReservation } from '@prisma/client';
 
 @Injectable()
 export class ProcessorService {
     private readonly logger = new Logger(ProcessorService.name);
-    private mailingWorkers: Record<string, boolean> = {};
-    private queues: Record<string, Bull.Queue> = {};
     constructor(
         private readonly prismaService: PrismaService,
         @Inject(forwardRef(() => ApplicationsService))
@@ -29,7 +24,6 @@ export class ProcessorService {
         private httpService: HttpService,
         private configService: ConfigService,
         private readonly reservationService: ReservationService,
-        private readonly mailingQueueWorker: MailingQueueWorker,
         @Inject(forwardRef(() => require('./mailing.service').MailingService))
         private readonly mailingService: any,
     ) { }
@@ -63,16 +57,15 @@ export class ProcessorService {
         } else {
             await this.sendToBotUsers(botSeller, mailing, inlineKeyboard, reservation.id);
         }
-        // await this.prismaService.mailingReservation.update({
-        //     where: { id: reservation.id },
-        //     data: {
-        //         isProcessed: true,
-        //         processedAt: new Date(),
-        //         adminApprovalStatus: 'PENDING',
-        //     }
-        // });
-        // await this.updateMailingStatistics(botSeller, mailing);
-        // const completedMailing = await this.reservationService.checkAndDeactivateMailing(mailing.id);
+        await this.prismaService.mailingReservation.update({
+            where: { id: reservation.id },
+            data: {
+                isProcessed: true,
+                processedAt: new Date(),
+                adminApprovalStatus: 'PENDING',
+            }
+        });
+        await this.updateMailingStatistics(botSeller, mailing);
         const props: MailingNotifyProps = {
             isChannel: botSeller.isChannel,
             paymentType: targetBot?.paymentType || 'fixed',
@@ -137,7 +130,7 @@ export class ProcessorService {
         }
     }
 
-    async sendToBotUsers(botSeller: BotSeller, mailing: Mailing, buttons, reservationId?: number) {
+    async sendToBotUsers(botSeller: BotSeller, mailing: Mailing, buttons, reservationId: number) {
 
         if (!botSeller.statisticsFilePath) {
             this.logger.warn(`No statistics file for bot ${botSeller.id}, skipping`);
@@ -150,7 +143,7 @@ export class ProcessorService {
 
             // Подготавливаем данные для отправки в Go микросервис
             const mailingData = {
-                mailing_id: `${reservationId}_${mailing.id}`,
+                mailing_id: `${reservationId}`,
                 bot_token: botSeller.botToken,
                 users_file_url: botSeller.statisticsFilePath, // Публичный URL файла
                 message_data: {
@@ -183,7 +176,8 @@ export class ProcessorService {
                 this.logger.log(`Mailing ${mailing.id} for bot ${botSeller.id} queued in Go worker with ${response.data.total_tasks} tasks`);
                 
                 // Обновляем статистику рассылки
-                // await this.updateMailingStatistics(botSeller, mailing);
+                await this.updateMailingStatistics(botSeller, mailing);
+                await this.reservationService.createQueueRecord(reservationId, `mailing_${reservationId}`, response.data.total_users);
                 
                 return {
                     success: true,
@@ -453,56 +447,4 @@ export class ProcessorService {
         return Math.round(messagesPerSecond * 100) / 100; // Округляем до 2 знаков после запятой
     }
 
-    /**
-     * Получить количество успешно отправленных сообщений для рассылки
-     * @param mailingId ID рассылки
-     */
-    getSuccessfullySent(mailingId: number): number {
-        const queueName = `mailing_${mailingId}`;
-        return this.mailingQueueWorker.getSuccessfullySent(queueName);
-    }
-
-    getQueueByName(queueName: string): Bull.Queue | undefined {
-        // Проксируем к воркеру, чтобы всегда получать актуальную очередь
-        return this.mailingQueueWorker.getQueueByName(queueName);
-    }
-
-    getQueueFloodwaitHistory(queueName: string): FloodWaitEvent[] {
-        return this.mailingQueueWorker.getFloodWaitHistory(queueName);
-    }
-
-    getQueueCurrentSpeed(queueName: string): number {
-        return this.mailingQueueWorker.getCurrentSpeed(queueName);
-    }
-
-    getQueueActualSpeed(queueName: string): number {
-        return this.mailingQueueWorker.getAverageProcessingSpeed(queueName, 5);
-    }
-
-    /**
-     * Получить фактическую скорость обработки за последнюю секунду
-     */
-    getQueueLastSecondSpeed(queueName: string): number {
-        return this.mailingQueueWorker.getActualProcessingSpeed(queueName);
-    }
-
-    /**
-     * Получить детальную диагностику скорости очереди
-     */
-    getQueueSpeedDiagnostics(queueName: string): {
-        currentSpeed: number;
-        actualSpeed: number;
-        averageSpeed: number;
-        limiterSettings?: any;
-    } {
-        const queue = this.mailingQueueWorker.getQueueByName(queueName);
-        return {
-            currentSpeed: this.mailingQueueWorker.getCurrentSpeed(queueName),
-            actualSpeed: this.mailingQueueWorker.getActualProcessingSpeed(queueName),
-            averageSpeed: this.mailingQueueWorker.getAverageProcessingSpeed(queueName, 10),
-            limiterSettings: queue ? (queue as any).opts?.limiter : undefined
-        };
-    }
-
-    // Методы, связанные с обработкой и отправкой рассылок, будут перенесены сюда из MailingService
 }

@@ -128,8 +128,9 @@ func (h *MailingHandler) CreateMailing(c *gin.Context) {
 			continue
 		}
 
-		// Добавляем задержку на основе rate limit
-		delay := time.Duration(i) * time.Second / time.Duration(req.RateLimit)
+		// ТЕСТ: Отключаем задержки - все задачи сразу в очередь для максимальной скорости
+		// delay := time.Duration(i) * time.Second / time.Duration(req.RateLimit)
+		delay := time.Duration(0) // Все задачи без задержки!
 
 		// Отправляем задачу в изолированную очередь воркера
 		info, err := h.client.Enqueue(task, asynq.Queue(queueName), asynq.ProcessIn(delay))
@@ -273,20 +274,39 @@ func loadUsersFromFile(fileURL string) ([]models.User, error) {
 			continue
 		}
 
-		// Поддерживаем форматы:
-		// 123456789
-		// 123456789:en
-		parts := strings.Split(line, ":")
+		// Разделяем строку по любому из разделителей: , | пробел
+		parts := strings.FieldsFunc(line, func(r rune) bool {
+			return r == ',' || r == '|' || r == ' ' || r == '\t'
+		})
 
-		user := models.User{
-			UserID: parts[0],
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+			// Если есть двоеточие, берем только до него
+			idAndLang := strings.SplitN(part, ":", 2)
+			userID := idAndLang[0]
+			var lang string
+			if len(idAndLang) > 1 {
+				lang = idAndLang[1]
+			}
+
+			// Валидация ID
+			if len(userID) < 9 || len(userID) > 10 {
+				logrus.WithField("user_id", userID).Warn("Invalid Telegram ID length, skipping")
+				continue
+			}
+			if !isDigits(userID) {
+				logrus.WithField("user_id", userID).Warn("Invalid Telegram ID format, skipping")
+				continue
+			}
+
+			user := models.User{
+				UserID:   userID,
+				Language: lang,
+			}
+			users = append(users, user)
 		}
-
-		if len(parts) > 1 {
-			user.Language = parts[1]
-		}
-
-		users = append(users, user)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -294,4 +314,15 @@ func loadUsersFromFile(fileURL string) ([]models.User, error) {
 	}
 
 	return users, nil
+
+}
+
+// isDigits проверяет, что строка состоит только из цифр
+func isDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

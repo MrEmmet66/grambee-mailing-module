@@ -128,25 +128,46 @@ export class StatsService {
             where: { id: mailingReservationId },
             include: { botSeller: true, mailing: true }
         });
-        const queue = await this.prisma.reservationQueue.findFirst({
-            where: { mailingReservationId: mailingReservationId }
-        });
-        if (!queue) throw new NotFoundException('Reservation queue not found');
         if (!reservation) throw new NotFoundException('Mailing reservation not found');
+        const queue = await this.prisma.reservationQueue.findFirst({
+            where: { mailingReservationId: reservation.id }
+        });
 
+        // Получаем метрики воркера из Go сервиса для дополнительной информации
+        const goWorkerUrl = this.configService.get('GO_MAILING_WORKER_URL', 'http://go-mailing-worker:8080');
+        let workerMetrics: any = null;
+        try {
+            const mailingId = reservation.id;
+            if (mailingId) {
+                // Конвертируем number в string для Go API
+                const response = await fetch(`${goWorkerUrl}/api/v1/mailings/${mailingId.toString()}/metrics`);
+                if (response.ok) {
+                    workerMetrics = await response.json();
+                } else {
+                    console.error(`Failed to fetch metrics for mailing ${mailingId}: HTTP ${response.status}`);
+                }
+            }
+        } catch (err) {
+            console.error('Error fetching worker metrics:', err);
+            // Игнорируем ошибки получения метрик воркера
+        }
+
+        // Используем данные воркера как основной источник, с fallback на разумные значения по умолчанию
+        const now = new Date();
         return {
             totalClicks: reservation.viewCount || 0,
             uniqueClicks: reservation.viewCount || 0,
             userStats: { new: 0, dead: 0, premium: 0, rtl: 0 },
             conversionStats: { performedActions: 0, passedSponsors: 0, leftAfterStart: 0 },
             audienceAnalysis: {},
-            totalSent: queue.sentCount || 0,
-            totalFailed: queue.failedCount || 0,
-            totalUsers: queue.totalUsers || 0,
-            averageSpeed: await this.processorService.getAverageQueueSpeed(queue.queueName) || 0,
-            queueStart: queue.createdAt,
-            queueEnd: queue.updatedAt || new Date(),
-
+            // Используем данные воркера если доступны, иначе значения по умолчанию
+            totalSent: workerMetrics?.sent_messages || queue?.sentCount || 0,
+            totalFailed: workerMetrics?.failed_messages || queue?.failedCount || 0,
+            totalUsers: workerMetrics?.total_messages || queue?.totalUsers || 0,
+            averageSpeed: workerMetrics?.messages_per_sec || 0,
+            // Используем время из метрик воркера или время резервации
+            queueStart: workerMetrics?.start_time ? new Date(workerMetrics.start_time) : reservation.date,
+            queueEnd: workerMetrics?.last_update_time ? new Date(workerMetrics.last_update_time) : queue?.updatedAt || now,
         };
     }
 
@@ -235,50 +256,38 @@ export class StatsService {
     }
 
     async formatBotStatistics(stats: BotStatistics, reservationId: number): Promise<string> {
+        const goWorkerUrl = this.configService.get('GO_MAILING_WORKER_URL', 'http://go-mailing-worker:8080');
         const total = stats.totalClicks;
-        const estimatedDateTime = stats.queueEnd ? new Date(stats.queueEnd.getTime() + (stats.totalUsers / stats.averageSpeed) * 1000).toLocaleString() : 'N/A';
 
-        // Получаем базовую статистику по памяти и CPU
-        const mem = process.memoryUsage();
-        const cpu = process.cpuUsage();
-        const memMb = (mem.rss / 1024 / 1024).toFixed(2);
-        const heapUsedMb = (mem.heapUsed / 1024 / 1024).toFixed(2);
-        const heapTotalMb = (mem.heapTotal / 1024 / 1024).toFixed(2);
-        const cpuUserMs = (cpu.user / 1000).toFixed(0);
-        const cpuSystemMs = (cpu.system / 1000).toFixed(0);
-        const queueName = `mailing_${reservationId || ''}`;
-        const floodWaitHistory = this.processorService?.getQueueFloodwaitHistory(queueName) || [];
+        // Получаем данные резервации для mailingId
+        const reservation = await this.prisma.mailingReservation.findUnique({
+            where: { id: reservationId },
+            include: { mailing: true }
+        });
 
-        // Метрики очереди и Redis
-        let queueStats = '';
+        // Получаем метрики воркера из Go сервиса
+        let workerMetrics = '';
         try {
-            // Получаем имя очереди (по соглашению)
-            
-
-            // Получаем очередь через ProcessorService (если реализовано)
-            const queue = this.processorService?.getQueueByName(queueName);
-
-            if (queue) {
-                const counts = await queue.getJobCounts();
-                queueStats += `\nОчередь: ${queueName}`;
-                queueStats += `\n  waiting: ${counts.waiting}`;
-                queueStats += `\n  active: ${counts.active}`;
-                queueStats += `\n  completed: ${counts.completed}`;
-                queueStats += `\n  failed: ${counts.failed}`;
-                queueStats += `\n  delayed: ${counts.delayed}`;
-                // Redis info
-                const redisInfo = await queue.client.info();
-                // Парсим used_memory и connected_clients
-                const usedMemory = redisInfo.match(/used_memory:(\d+)/)?.[1];
-                const connectedClients = redisInfo.match(/connected_clients:(\d+)/)?.[1];
-                if (usedMemory && connectedClients) {
-                    queueStats += `\nRedis: used_memory: ${(Number(usedMemory)/1024/1024).toFixed(2)} MB, connected_clients: ${connectedClients}`;
+            // Используем mailing.id как mailing_id для запроса метрик
+            const mailingId = reservation?.mailing?.id;
+            if (mailingId) {
+                // Конвертируем number в string для Go API
+                const response = await fetch(`${goWorkerUrl}/api/v1/mailings/${mailingId.toString()}/metrics`);
+                if (response.ok) {
+                    const metrics = await response.json();
+                    workerMetrics = `
+📊 Метрики воркера (Redis):
+├FLOOD_WAIT событий: ${metrics.flood_wait_count}
+├Общее время FLOOD_WAIT: ${metrics.total_flood_wait_sec}s
+└Последнее обновление: ${new Date(metrics.last_update_time).toLocaleString()}`;
+                } else {
+                    workerMetrics = `\n(Метрики воркера недоступны: HTTP ${response.status})`;
                 }
             } else {
-                queueStats += '\nОчередь завершена или неактивна';
+                workerMetrics = `\n(ID рассылки не найден)`;
             }
         } catch (err) {
-            queueStats += `\n(Не удалось получить метрики очереди/Redis)`;
+            workerMetrics = `\n(Не удалось получить метрики воркера: ${err.message})`;
         }
 
         return `
@@ -303,22 +312,12 @@ export class StatsService {
 Всего отправлено: ${stats.totalSent}
 Всего неудачно: ${stats.totalFailed}
 ⏱️ Средняя скорость рассылки: ${stats.averageSpeed.toFixed(2)} сообщений/сек
-⏱️ Заданная Скорость рассылки: ${this.processorService.getQueueCurrentSpeed(queueName).toFixed(2)} сообщений/сек
-⏱️ Сообщений за 5 секунд: ${this.processorService.getQueueActualSpeed(queueName).toFixed(2)} сообщений/5 сек
 
 🕒 Время начала очереди: ${stats.queueStart.toString()}
 🕔 Время окончания очереди: ${stats.queueEnd.toString()}
-🕓 Оценочное время завершения: ${estimatedDateTime.toString()}
 
-📊 Использование ресурсов сервера:
-Память RSS: ${memMb} MB
-Heap Used: ${heapUsedMb} MB / ${heapTotalMb} MB
-CPU: user ${cpuUserMs} ms, system ${cpuSystemMs} ms
+${workerMetrics}
 
-${queueStats}
-
-📈 FLOOD_WAIT история:
-${floodWaitHistory.map(event => `- ${new Date(event.timestamp).toLocaleString()}: ${event.retryAfter} сек`).join('\n')}
 
         `
     }

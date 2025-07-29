@@ -64,7 +64,7 @@ enum QueueStatus {
 model BotSeller {
   id Int @id @default(autoincrement())
   userId Int
-  botToken String @unique
+  botToken String
   usersData Json
   description String?
   createdAt DateTime @default(now())
@@ -75,8 +75,9 @@ model BotSeller {
   acceptStatus BotSellerStatus @default(PENDING)
   category BotCategories @default(OTHER)
   isChannel Boolean @default(false)
-  channelId String?                        // ID канала, если isChannel = true
+  channelId String?                       // ID канала, если isChannel = true
   statisticsFilePath String?               // путь к файлу статистики бота
+  title String?                     // название бота
 
   // Bot statistics
   totalBotAudience Int? @default(0) // общая аудитория бота

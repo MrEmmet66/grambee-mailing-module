@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hibiken/asynq"
 	"github.com/sirupsen/logrus"
 )
 
@@ -75,7 +74,8 @@ func (wm *WorkerManager) StartWorker(mailingID string, totalTasks int) (*WorkerP
 		"-redis-addr", wm.redisAddr,
 		"-redis-password", wm.redisPassword,
 		"-redis-db", fmt.Sprintf("%d", wm.redisDB),
-		"-concurrency", "50", // Высокий concurrency для одной рассылки
+		"-concurrency", "10", // ИСПРАВЛЯЕМ: Меньше потоков, так как rate limiter теперь общий
+		"-total-tasks", fmt.Sprintf("%d", totalTasks), // ИСПРАВЛЯЕМ: Передаем правильное количество задач
 	)
 
 	// Настраиваем переменные окружения
@@ -226,31 +226,7 @@ func (wm *WorkerManager) monitorWorker(worker *WorkerProcess) {
 	delete(wm.workers, worker.MailingID)
 	logrus.WithField("mailing_id", worker.MailingID).Info("Worker removed from active workers list")
 
-	// Очищаем очередь из Redis после завершения worker'а
-	go func() {
-		time.Sleep(3 * time.Second) // Даем время на полное завершение
-
-		// Создаем инспектор для очистки очереди
-		inspector := asynq.NewInspector(asynq.RedisClientOpt{
-			Addr:     wm.redisAddr,
-			Password: wm.redisPassword,
-			DB:       wm.redisDB,
-		})
-		defer inspector.Close()
-
-		err := inspector.DeleteQueue(worker.QueueName, false)
-		if err != nil {
-			logrus.WithError(err).WithFields(logrus.Fields{
-				"mailing_id": worker.MailingID,
-				"queue_name": worker.QueueName,
-			}).Warn("Failed to delete queue after worker completion")
-		} else {
-			logrus.WithFields(logrus.Fields{
-				"mailing_id": worker.MailingID,
-				"queue_name": worker.QueueName,
-			}).Info("Queue deleted after worker completion")
-		}
-	}()
+	// ПРИМЕЧАНИЕ: Очередь удаляется в самом worker'е для предотвращения дублирования
 }
 
 // StopAllWorkers останавливает все активные воркеры

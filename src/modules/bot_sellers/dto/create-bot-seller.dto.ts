@@ -48,11 +48,6 @@ export class CreateBotSellerDto {
   @IsOptional()
   isChannel?: string;
 
-
-  @IsString()
-  @ValidateIf(o => o.isChannel === 'true')
-  @ApiProperty({ description: 'ID канала', required: false })
-  channelId?: string;
 } 
 
 export interface CreateBotSellerFormData {
@@ -65,5 +60,4 @@ export interface CreateBotSellerFormData {
   link: string;
   isChannel?: boolean;
   statisticsFile?: Express.Multer.File;
-  channelId?: string;
 }

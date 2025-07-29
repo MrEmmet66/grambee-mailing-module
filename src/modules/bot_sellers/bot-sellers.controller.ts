@@ -70,7 +70,6 @@ export class BotSellersController {
       link: createBotSellerDto.link,
       isChannel: String(createBotSellerDto.isChannel).toLowerCase() === 'true',
       statisticsFile: statisticsFile ? statisticsFile : undefined,
-      channelId: createBotSellerDto.channelId,
     }
     console.log('statisticsFile:', statisticsFile);
     

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/redis/go-redis/v9"
 	"github.com/sirupsen/logrus"
 )
@@ -13,6 +14,13 @@ import (
 // MetricsTracker отслеживает метрики рассылок
 type MetricsTracker struct {
 	redisClient *redis.Client
+}
+
+// AsynqQueueStats статистика очереди из asynq
+type AsynqQueueStats struct {
+	Size      int `json:"size"`      // размер очереди (pending)
+	Processed int `json:"processed"` // успешно обработанные
+	Failed    int `json:"failed"`    // неудачные (доставка не удалась)
 }
 
 // MailingMetrics метрики рассылки
@@ -27,6 +35,8 @@ type MailingMetrics struct {
 	AvgResponseTime int64     `json:"avg_response_time_ms"`
 	FloodWaitCount  int       `json:"flood_wait_count"`
 	TotalFloodWait  int64     `json:"total_flood_wait_sec"`
+	CurrentRate     float64   `json:"current_rate"` // текущая скорость rate limiter
+	MaxRate         float64   `json:"max_rate"`     // максимальная скорость rate limiter
 }
 
 // NewMetricsTracker создает новый трекер метрик
@@ -34,6 +44,27 @@ func NewMetricsTracker(redisClient *redis.Client) *MetricsTracker {
 	return &MetricsTracker{
 		redisClient: redisClient,
 	}
+}
+
+// GetAsynqQueueStats получает статистику очереди из asynq
+func (m *MetricsTracker) GetAsynqQueueStats(ctx context.Context, queueName string) (*AsynqQueueStats, error) {
+	inspector := asynq.NewInspector(asynq.RedisClientOpt{
+		Addr:     m.redisClient.Options().Addr,
+		Password: m.redisClient.Options().Password,
+		DB:       m.redisClient.Options().DB,
+	})
+	defer inspector.Close()
+
+	queueInfo, err := inspector.GetQueueInfo(queueName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get queue info: %w", err)
+	}
+
+	return &AsynqQueueStats{
+		Size:      queueInfo.Size,
+		Processed: queueInfo.Processed,
+		Failed:    queueInfo.Failed,
+	}, nil
 }
 
 // InitMailingMetrics инициализирует метрики для новой рассылки
@@ -49,6 +80,8 @@ func (m *MetricsTracker) InitMailingMetrics(ctx context.Context, mailingID strin
 		AvgResponseTime: 0,
 		FloodWaitCount:  0,
 		TotalFloodWait:  0,
+		CurrentRate:     25.0, // начальная скорость rate limiter
+		MaxRate:         60.0, // максимальная скорость rate limiter
 	}
 
 	data, err := json.Marshal(metrics)
@@ -60,32 +93,23 @@ func (m *MetricsTracker) InitMailingMetrics(ctx context.Context, mailingID strin
 	return m.redisClient.Set(ctx, key, data, 24*time.Hour).Err()
 }
 
-// UpdateMessageSent обновляет счетчик отправленных сообщений
-func (m *MetricsTracker) UpdateMessageSent(ctx context.Context, mailingID string, responseTimeMs int64) error {
-	return m.updateMetrics(ctx, mailingID, func(metrics *MailingMetrics) {
-		metrics.SentMessages++
-		metrics.LastUpdateTime = time.Now()
+// UpdateMessageSent обновляет счетчик отправленных сообщений (УДАЛЕНО - теперь берем из asynq)
+// DEPRECATED: Этот метод больше не используется, данные берутся из asynq
 
-		// Обновляем среднее время ответа
-		if metrics.SentMessages == 1 {
+// UpdateMessageFailed обновляет счетчик неудачных сообщений (УДАЛЕНО - теперь берем из asynq)
+// DEPRECATED: Этот метод больше не используется, данные берутся из asynq
+
+// UpdateResponseTime обновляет среднее время ответа
+func (m *MetricsTracker) UpdateResponseTime(ctx context.Context, mailingID string, responseTimeMs int64) error {
+	return m.updateMetrics(ctx, mailingID, func(metrics *MailingMetrics) {
+		metrics.LastUpdateTime = time.Now()
+		// Обновляем среднее время ответа (скользящее среднее)
+		if metrics.AvgResponseTime == 0 {
 			metrics.AvgResponseTime = responseTimeMs
 		} else {
-			metrics.AvgResponseTime = (metrics.AvgResponseTime + responseTimeMs) / 2
+			// Скользящее среднее: новое значение получает вес 0.1, старое 0.9
+			metrics.AvgResponseTime = int64(float64(metrics.AvgResponseTime)*0.9 + float64(responseTimeMs)*0.1)
 		}
-
-		// Пересчитываем скорость отправки
-		duration := metrics.LastUpdateTime.Sub(metrics.StartTime).Seconds()
-		if duration > 0 {
-			metrics.MessagesPerSec = float64(metrics.SentMessages) / duration
-		}
-	})
-}
-
-// UpdateMessageFailed обновляет счетчик неудачных сообщений
-func (m *MetricsTracker) UpdateMessageFailed(ctx context.Context, mailingID string) error {
-	return m.updateMetrics(ctx, mailingID, func(metrics *MailingMetrics) {
-		metrics.FailedMessages++
-		metrics.LastUpdateTime = time.Now()
 	})
 }
 
@@ -98,24 +122,94 @@ func (m *MetricsTracker) UpdateFloodWait(ctx context.Context, mailingID string, 
 	})
 }
 
+// UpdateRateLimiter обновляет информацию о rate limiter в метриках
+func (m *MetricsTracker) UpdateRateLimiter(ctx context.Context, mailingID string, currentRate, maxRate float64) error {
+	return m.updateMetrics(ctx, mailingID, func(metrics *MailingMetrics) {
+		metrics.CurrentRate = currentRate
+		metrics.MaxRate = maxRate
+		metrics.LastUpdateTime = time.Now()
+	})
+}
+
 // GetMailingMetrics получает метрики рассылки
 func (m *MetricsTracker) GetMailingMetrics(ctx context.Context, mailingID string) (*MailingMetrics, error) {
+	// Сначала пробуем найти по точному ключу
 	key := fmt.Sprintf("mailing_metrics:%s", mailingID)
 	data, err := m.redisClient.Get(ctx, key).Result()
-	if err != nil {
-		if err == redis.Nil {
+	if err == nil {
+		var metrics MailingMetrics
+		err = json.Unmarshal([]byte(data), &metrics)
+		if err != nil {
+			return nil, err
+		}
+
+		// НОВОЕ: Получаем актуальные данные из asynq
+		queueName := fmt.Sprintf("mailing_%s", mailingID)
+		asynqStats, err := m.GetAsynqQueueStats(ctx, queueName)
+		if err != nil {
+			logrus.WithError(err).WithField("queue_name", queueName).Warn("Failed to get asynq stats, using stored values")
+		} else {
+			// Заменяем счетчики данными из asynq
+			metrics.SentMessages = asynqStats.Processed - asynqStats.Failed
+			metrics.FailedMessages = asynqStats.Failed
+
+			// Рассчитываем актуальную скорость (messages per sec)
+			duration := time.Since(metrics.StartTime).Seconds()
+			totalProcessed := metrics.SentMessages + metrics.FailedMessages
+			if duration > 0 {
+				metrics.MessagesPerSec = float64(totalProcessed) / duration
+			}
+		}
+
+		return &metrics, nil
+	}
+
+	// Если не найдено, ищем по паттерну (для поддержки составных ключей)
+	if err == redis.Nil {
+		pattern := fmt.Sprintf("mailing_metrics:*_%s", mailingID)
+		keys, err := m.redisClient.Keys(ctx, pattern).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		if len(keys) == 0 {
 			return nil, fmt.Errorf("metrics not found for mailing %s", mailingID)
 		}
-		return nil, err
+
+		// Берем первый найденный ключ (должен быть только один)
+		data, err := m.redisClient.Get(ctx, keys[0]).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		var metrics MailingMetrics
+		err = json.Unmarshal([]byte(data), &metrics)
+		if err != nil {
+			return nil, err
+		}
+
+		// НОВОЕ: Получаем актуальные данные из asynq для составного ключа
+		queueName := fmt.Sprintf("mailing_%s", mailingID)
+		asynqStats, err := m.GetAsynqQueueStats(ctx, queueName)
+		if err != nil {
+			logrus.WithError(err).WithField("queue_name", queueName).Warn("Failed to get asynq stats, using stored values")
+		} else {
+			// Заменяем счетчики данными из asynq
+			metrics.SentMessages = asynqStats.Processed
+			metrics.FailedMessages = asynqStats.Failed
+
+			// Рассчитываем актуальную скорость (messages per sec)
+			duration := time.Since(metrics.StartTime).Seconds()
+			totalProcessed := metrics.SentMessages + metrics.FailedMessages
+			if duration > 0 {
+				metrics.MessagesPerSec = float64(totalProcessed) / duration
+			}
+		}
+
+		return &metrics, nil
 	}
 
-	var metrics MailingMetrics
-	err = json.Unmarshal([]byte(data), &metrics)
-	if err != nil {
-		return nil, err
-	}
-
-	return &metrics, nil
+	return nil, err
 }
 
 // GetAllMailingMetrics получает метрики всех активных рассылок
@@ -137,6 +231,24 @@ func (m *MetricsTracker) GetAllMailingMetrics(ctx context.Context) (map[string]*
 		if err := json.Unmarshal([]byte(data), &metrics); err != nil {
 			logrus.WithError(err).WithField("key", key).Warn("Failed to unmarshal metrics")
 			continue
+		}
+
+		// НОВОЕ: Получаем актуальные данные из asynq для каждой рассылки
+		queueName := fmt.Sprintf("mailing_%s", metrics.MailingID)
+		asynqStats, err := m.GetAsynqQueueStats(ctx, queueName)
+		if err != nil {
+			logrus.WithError(err).WithField("queue_name", queueName).Debug("Failed to get asynq stats, using stored values")
+		} else {
+			// Заменяем счетчики данными из asynq
+			metrics.SentMessages = asynqStats.Processed
+			metrics.FailedMessages = asynqStats.Failed
+
+			// Рассчитываем актуальную скорость (messages per sec)
+			duration := time.Since(metrics.StartTime).Seconds()
+			totalProcessed := metrics.SentMessages + metrics.FailedMessages
+			if duration > 0 {
+				metrics.MessagesPerSec = float64(totalProcessed) / duration
+			}
 		}
 
 		result[metrics.MailingID] = &metrics

@@ -6,6 +6,7 @@ import { TelegramService } from '../../telegram/telegram.service';
 import { CreateMailingReservationDto } from '../dto/createMailingReservation.dto';
 import { ReservationCancellationResult, ReservationCreationResult } from '../types/reservation.types';
 import { MailingReservation } from '@prisma/client';
+import { CompleteMailingDto } from '../dto/completeMailing.dto';
 
 @Injectable()
 export class ReservationService {
@@ -445,14 +446,52 @@ async incrementQueueFailed(queueName: string, count: number) {
     });
 }
 
-async completeQueue(queueName: string) {
-    return this.prismaService.reservationQueue.updateMany({
-        where: { queueName },
+async completeQueue(dto: CompleteMailingDto) {
+    this.logger.log(`Completing queue ${dto.queueName} with sent: ${dto.sentCount}, failed: ${dto.failedCount}`);
+    
+    // Найдем reservation queue record для получения reservation ID
+    const queueRecord = await this.prismaService.reservationQueue.findFirst({
+        where: { queueName: dto.queueName },
+        include: {
+            mailingReservation: true
+        }
+    });
+
+    if (!queueRecord) {
+        throw new NotFoundException(`Queue record not found for queue: ${dto.queueName}`);
+    }
+
+    const reservationId = queueRecord.mailingReservationId;
+    
+    // Обновляем viewCount в mailing reservation (это количество успешно отправленных сообщений)
+    await this.prismaService.mailingReservation.update({
+        where: { id: reservationId },
+        data: {
+            viewCount: dto.sentCount,
+            isProcessed: true,
+            processedAt: new Date()
+        },
+    });
+
+    // Обновляем статус и счетчики в queue record
+    const updatedQueue = await this.prismaService.reservationQueue.updateMany({
+        where: { queueName: dto.queueName },
         data: {
             status: 'COMPLETED',
+            sentCount: dto.sentCount,
+            failedCount: dto.failedCount,
             updatedAt: new Date(),
         },
     });
+
+    this.logger.log(`Queue ${dto.queueName} completed successfully. Reservation ${reservationId} marked as processed with ${dto.sentCount} sent messages`);
+    
+    // Проверяем, можно ли деактивировать рассылку (если все резервации обработаны)
+    if (queueRecord.mailingReservation) {
+        await this.checkAndDeactivateMailing(queueRecord.mailingReservation.mailingId);
+    }
+
+    return updatedQueue;
 }
 
 }

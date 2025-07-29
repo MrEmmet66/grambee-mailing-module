@@ -46,6 +46,17 @@ export class MailingService {
         return mailing.user.telegramId;
     }
 
+    async getMailingOwner(mailingId: number) {
+        const mailing = await this.prismaService.mailing.findUnique({
+            where: { id: mailingId },
+            include: { user: true }
+        });
+        if (!mailing) {
+            throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
+        }
+        return mailing.user;
+    }
+
     async deleteMailing(mailingId: number) {
         const mailing = await this.prismaService.mailing.findUnique({
             where: { id: mailingId }
@@ -240,12 +251,7 @@ export class MailingService {
     }    async processMailing(reservation) {
         return this.processorService.processMailing(reservation);
     }
-    async sendToChannel(botSeller, mailing, buttons) {
-        return this.processorService.sendToChannel(botSeller, mailing, buttons);
-    }
-    async sendToBotUsers(botSeller, mailing, buttons) {
-        return this.processorService.sendToBotUsers(botSeller, mailing, buttons);
-    }
+    
     async readUserList(filePath: string) {
         return this.processorService.readUserList(filePath);
     }
