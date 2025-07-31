@@ -76,12 +76,52 @@ export class MailingController {
         const isChannel = dto.isChannel === 'true'
 
         // Prepare data for the service
+        let buttons: string[] = [];
+        // Debug log raw buttons input
+        console.log('RAW BUTTONS:', dto.buttons);
+        if (dto.buttons) {
+            if (typeof dto.buttons === 'string') {
+                try {
+                    const parsed = JSON.parse(dto.buttons);
+                    console.log('PARSED BUTTONS:', parsed);
+                    if (Array.isArray(parsed)) {
+                        buttons = parsed;
+                    } else {
+                        buttons = [];
+                    }
+                } catch (e) {
+                    console.log('BUTTONS PARSE ERROR:', e);
+                    buttons = [];
+                }
+            } else if (Array.isArray(dto.buttons)) {
+                if (
+                    dto.buttons.length === 1 &&
+                    typeof (dto.buttons[0] as string) === 'string' &&
+                    ((dto.buttons[0] as string).startsWith('['))
+                ) {
+                    try {
+                        const parsed = JSON.parse(dto.buttons[0] as string);
+                        console.log('PARSED BUTTONS:', parsed);
+                        if (Array.isArray(parsed)) {
+                            buttons = parsed;
+                        } else {
+                            buttons = [];
+                        }
+                    } catch (e) {
+                        console.log('BUTTONS PARSE ERROR:', e);
+                        buttons = [];
+                    }
+                } else {
+                    buttons = dto.buttons;
+                }
+            }
+        }
         const mailingData: CreateMailingDto = {
             botToken: dto.botToken,
             userId: userId,
             content: dto.content,
             mediaType: dto.mediaType || 'photo', // Default to photo if not specified
-            buttonContent: dto.buttonContent,
+            buttons,
             media: file,
             link: dto.link, // Optional field
             isChannel: isChannel
@@ -138,10 +178,33 @@ export class MailingController {
         }
 
         // Add the uploaded file to the update data
+        let buttons: string[] = [];
+        console.log('RAW BUTTONS (update):', updateData.buttons);
+        if (updateData.buttons) {
+            if (typeof updateData.buttons === 'string') {
+                try {
+                    const parsed = JSON.parse(updateData.buttons);
+                    console.log('PARSED BUTTONS (update):', parsed);
+                    if (Array.isArray(parsed)) {
+                        buttons = parsed;
+                    } else {
+                        buttons = [];
+                    }
+                } catch (e) {
+                    console.log('BUTTONS PARSE ERROR (update):', e);
+                    buttons = [];
+                }
+            } else if (Array.isArray(updateData.buttons)) {
+                buttons = updateData.buttons;
+            }
+        }
         const updateDataWithFile: UpdateMailingContentFormData = {
             ...updateData,
-            media: file
+            media: file,
+            buttons
         };
+
+        console.log('data:', updateDataWithFile);
 
         return await this.mailingService.updateMailingContent(mailingId, updateDataWithFile);
     }

@@ -150,6 +150,7 @@ model Mailing {
 
   status MailingStatus @default(PENDING)
   isActive Boolean @default(false)
+  
 
   // post
   postContent String

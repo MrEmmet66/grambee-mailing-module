@@ -3,8 +3,10 @@ package handlers
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -267,54 +269,66 @@ func loadUsersFromFile(fileURL string) ([]models.User, error) {
 
 	var users []models.User
 	scanner := bufio.NewScanner(file)
+	var scanErr error
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-
-		// Разделяем строку по любому из разделителей: , | пробел
-		parts := strings.FieldsFunc(line, func(r rune) bool {
-			return r == ',' || r == '|' || r == ' ' || r == '\t'
-		})
-
-		for _, part := range parts {
-			if part == "" {
-				continue
-			}
-			// Если есть двоеточие, берем только до него
-			idAndLang := strings.SplitN(part, ":", 2)
+		re := regexp.MustCompile(`\d{6,12}(:[a-zA-Z]{2})?`)
+		matches := re.FindAllString(line, -1)
+		for _, match := range matches {
+			idAndLang := strings.SplitN(match, ":", 2)
 			userID := idAndLang[0]
 			var lang string
 			if len(idAndLang) > 1 {
 				lang = idAndLang[1]
 			}
-
-			// Валидация ID
-			if len(userID) < 9 || len(userID) > 10 {
+			if len(userID) < 6 || len(userID) > 12 {
 				logrus.WithField("user_id", userID).Warn("Invalid Telegram ID length, skipping")
 				continue
 			}
-			if !isDigits(userID) {
-				logrus.WithField("user_id", userID).Warn("Invalid Telegram ID format, skipping")
-				continue
-			}
-
-			user := models.User{
+			users = append(users, models.User{
 				UserID:   userID,
 				Language: lang,
-			}
-			users = append(users, user)
+			})
 		}
 	}
+	scanErr = scanner.Err()
 
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading file: %w", err)
+	// Если ошибка bufio.Scanner: token too long, читаем весь файл как одну строку
+	if scanErr != nil && strings.Contains(scanErr.Error(), "token too long") {
+		logrus.Warn("Scanner token too long, fallback to reading entire file as one string")
+		file.Seek(0, 0) // Сброс позиции
+		reader := bufio.NewReader(file)
+		content, err := reader.ReadString(0)
+		if err != nil && err != io.EOF {
+			return nil, fmt.Errorf("error reading file: %w", err)
+		}
+		re := regexp.MustCompile(`\d{6,12}(:[a-zA-Z]{2})?`)
+		matches := re.FindAllString(content, -1)
+		for _, match := range matches {
+			idAndLang := strings.SplitN(match, ":", 2)
+			userID := idAndLang[0]
+			var lang string
+			if len(idAndLang) > 1 {
+				lang = idAndLang[1]
+			}
+			if len(userID) < 6 || len(userID) > 12 {
+				logrus.WithField("user_id", userID).Warn("Invalid Telegram ID length, skipping")
+				continue
+			}
+			users = append(users, models.User{
+				UserID:   userID,
+				Language: lang,
+			})
+		}
+	} else if scanErr != nil {
+		return nil, fmt.Errorf("error reading file: %w", scanErr)
 	}
 
 	return users, nil
-
 }
 
 // isDigits проверяет, что строка состоит только из цифр

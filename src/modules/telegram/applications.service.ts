@@ -42,7 +42,7 @@ export class ApplicationsService {
         const message =
             `<b>🚀 Рассылка отправлена</b>\n\n` +
             `<b>Тип:</b> ${props.isChannel ? 'Канал' : 'Бот'}\n` +
-            `<b>Стоимость:</b> ${props.paymentType === 'fixed' ? `Фиксированная (${escape(String(props.fixedPrice))}р)` : `Постоплата пдп (${escape(String(props.subscriberPrice))}$)`}\n` +
+            `<b>Стоимость:</b> ${props.paymentType === 'fixed' ? `Фиксированная (${escape(String(props.fixedPrice))}$)` : `Постоплата пдп (${escape(String(props.subscriberPrice))}$)`}\n` +
             `<b>Дата рекламы:</b> ${escape(props.mailingDate.toLocaleDateString())}\n` +
             `<b>Источник:</b> ${escape(props.botSellerLink)} @${escape(props.botSellerOwnerUsername || 'неизвестно')}\n` +
             `<b>Заказчик:</b> ${escape(props.mailingLink)} @${escape(props.mailingOwnerUsername || 'неизвестно')}`;
@@ -159,7 +159,7 @@ export class ApplicationsService {
                 `<b>📂 Тип медиа:</b> ${mailing.postMediaType || 'Не указан'}\n\n` :
                 ''
             ) +
-            `<b>🔘 Текст кнопки:</b> ${buttonText}`;
+            `<b>🔘 Кнопки:</b> ${buttonText}`;
 
         try {
             const sentMessage = await this.bot.telegram.sendMessage(chatId, message, {
@@ -993,12 +993,12 @@ export class ApplicationsService {
 ✅ **РАССЫЛКА ОДОБРЕНА И ОПЛАЧЕНА**
 
 🆔 **ID резервации:** #${reservationId}
-💰 **Итого к оплате:** ${result.totalPayment}р
-👤 **Продавцу:** ${result.sellerAmount}р  
-🏢 **Комиссия сервиса:** ${result.serviceCommission}р
+💰 **Итого к оплате:** ${result.totalPayment}$
+👤 **Продавцу:** ${result.sellerAmount}$  
+🏢 **Комиссия сервиса:** ${result.serviceCommission}$
 📊 **Переходов:** ${result.entranceCount}
-🔒 **Было в холде:** ${result.originalHold}р
-${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additionalCharge}р` : ''}
+🔒 **Было в холде:** ${result.originalHold}$
+${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additionalCharge}$` : ''}
 
 🕒 **Время обработки:** ${new Date().toLocaleString('ru-RU')}
 

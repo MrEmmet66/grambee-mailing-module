@@ -90,7 +90,7 @@ export class MailingService {
                 postContent: updateData.content,
                 postMediaType: updateData.mediaType,
                 postMedia: updateData.media ? `/uploads/${updateData.media.filename}` : null,
-                postButtons: updateData.buttonContent, // Store button text directly
+                postButtons: updateData.buttons // Store buttons as JSON string
             }
         });
 
@@ -137,7 +137,7 @@ export class MailingService {
             isChannel: !!dto.isChannel,
             hasMedia: !!dto.media,
             contentLength: dto.content?.length || 0,
-            buttonText: dto.buttonContent || 'No button'
+            buttons: Array.isArray(dto.buttons) ? dto.buttons : [dto.buttons]
         })}`);
 
         // get user by id or telegramId
@@ -171,7 +171,7 @@ export class MailingService {
                 throw new ConflictException(`Mailing with the same botToken, channelId or botLink already exists`);
             }
 
-            // Store button text directly (no need for JSON parsing)
+            // Store button array directly
             const mailing = await this.prismaService.mailing.create({
                 data: {
                     userId: user.id,
@@ -180,7 +180,7 @@ export class MailingService {
                     postContent: dto.content,
                     postMediaType: dto.mediaType,
                     postMedia: mediaPath,
-                    postButtons: dto.buttonContent, // Just store the button text
+                    postButtons: Array.isArray(dto.buttons) ? dto.buttons : [dto.buttons],
                     status: 'PENDING'
                 }
             });
@@ -250,28 +250,6 @@ export class MailingService {
         });
     }    async processMailing(reservation) {
         return this.processorService.processMailing(reservation);
-    }
-    
-    async readUserList(filePath: string) {
-        return this.processorService.readUserList(filePath);
-    }
-    applyFilters(users, filters) {
-        return this.processorService.applyFilters(users, filters);
-    }
-    buildInlineKeyboard(buttons) {
-        return this.processorService.buildInlineKeyboard(buttons);
-    }
-    async sendTextMessage(botToken, chatId, text, inlineKeyboard) {
-        return this.processorService.sendTextMessage(botToken, chatId, text, inlineKeyboard);
-    }
-    async sendMediaMessage(botToken, chatId, mailing, inlineKeyboard) {
-        return this.processorService.sendMediaMessage(botToken, chatId, mailing, inlineKeyboard);
-    }
-    async updateMailingStatistics(botSeller, mailing) {
-        return this.processorService.updateMailingStatistics(botSeller, mailing);
-    }
-    createButtonWithInviteLink(buttonText: string, inviteLink: string) {
-        return this.processorService.createButtonWithInviteLink(buttonText, inviteLink);
     }
 
     async getMessageViews(chatId: string, messageId: string): Promise<number> {

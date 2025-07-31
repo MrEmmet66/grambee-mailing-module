@@ -55,7 +55,7 @@ export class CreateMailingDto {
         type: 'string',
         example: 'Перейти'
     })
-    buttonContent: string;
+    buttons: string[];
 }
 
 // This interface represents the form data with file
@@ -66,14 +66,14 @@ export interface CreateMailingFormData {
     isChannel?: string;
     content: string;
     mediaType?: string;
-    buttonContent: string;
+    buttons: string | string[];
 }
 
 export interface UpdateMailingContentFormData {
     content: string;
     mediaType?: string;
     media?: Express.Multer.File;
-    buttonContent: string;
+    buttons: string | string[];
 }
 
 export class UpdateMailingContentDto {
@@ -104,5 +104,5 @@ export class UpdateMailingContentDto {
         type: 'string',
         example: 'Перейти'
     })
-    buttonContent: string;
+    buttons: string[];
 }

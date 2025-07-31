@@ -147,18 +147,17 @@ func (m *MetricsTracker) GetMailingMetrics(ctx context.Context, mailingID string
 		queueName := fmt.Sprintf("mailing_%s", mailingID)
 		asynqStats, err := m.GetAsynqQueueStats(ctx, queueName)
 		if err != nil {
-			logrus.WithError(err).WithField("queue_name", queueName).Warn("Failed to get asynq stats, using stored values")
-		} else {
-			// Заменяем счетчики данными из asynq
-			metrics.SentMessages = asynqStats.Processed - asynqStats.Failed
-			metrics.FailedMessages = asynqStats.Failed
+			return nil, fmt.Errorf("failed to get asynq stats for queue %s: %w", queueName, err)
+		}
+		// Заменяем счетчики данными из asynq
+		metrics.SentMessages = asynqStats.Processed - asynqStats.Failed
+		metrics.FailedMessages = asynqStats.Failed
 
-			// Рассчитываем актуальную скорость (messages per sec)
-			duration := time.Since(metrics.StartTime).Seconds()
-			totalProcessed := metrics.SentMessages + metrics.FailedMessages
-			if duration > 0 {
-				metrics.MessagesPerSec = float64(totalProcessed) / duration
-			}
+		// Рассчитываем актуальную скорость (messages per sec)
+		duration := time.Since(metrics.StartTime).Seconds()
+		totalProcessed := metrics.SentMessages + metrics.FailedMessages
+		if duration > 0 {
+			metrics.MessagesPerSec = float64(totalProcessed) / duration
 		}
 
 		return &metrics, nil
@@ -192,18 +191,17 @@ func (m *MetricsTracker) GetMailingMetrics(ctx context.Context, mailingID string
 		queueName := fmt.Sprintf("mailing_%s", mailingID)
 		asynqStats, err := m.GetAsynqQueueStats(ctx, queueName)
 		if err != nil {
-			logrus.WithError(err).WithField("queue_name", queueName).Warn("Failed to get asynq stats, using stored values")
-		} else {
-			// Заменяем счетчики данными из asynq
-			metrics.SentMessages = asynqStats.Processed
-			metrics.FailedMessages = asynqStats.Failed
+			return nil, fmt.Errorf("failed to get asynq stats for queue %s: %w", queueName, err)
+		}
+		// Заменяем счетчики данными из asynq
+		metrics.SentMessages = asynqStats.Processed
+		metrics.FailedMessages = asynqStats.Failed
 
-			// Рассчитываем актуальную скорость (messages per sec)
-			duration := time.Since(metrics.StartTime).Seconds()
-			totalProcessed := metrics.SentMessages + metrics.FailedMessages
-			if duration > 0 {
-				metrics.MessagesPerSec = float64(totalProcessed) / duration
-			}
+		// Рассчитываем актуальную скорость (messages per sec)
+		duration := time.Since(metrics.StartTime).Seconds()
+		totalProcessed := metrics.SentMessages + metrics.FailedMessages
+		if duration > 0 {
+			metrics.MessagesPerSec = float64(totalProcessed) / duration
 		}
 
 		return &metrics, nil

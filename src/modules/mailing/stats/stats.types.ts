@@ -1,18 +1,9 @@
 export interface BotStatistics {
     totalClicks: number;
     uniqueClicks: number;
-    userStats: {
-        new: number;
-        dead: number;
-        premium: number;
-        rtl: number;
-    };
-    conversionStats: {
-        performedActions: number;
-        passedSponsors: number;
-        leftAfterStart: number;
-    };
-    audienceAnalysis: Record<string, { count: number; percentage: number }>;
+    username: string; // Username of the bot owner
+    isFinished: boolean; // Indicates if the mailing is finished
+
     totalSent: number;
     totalFailed: number;
     totalUsers: number;

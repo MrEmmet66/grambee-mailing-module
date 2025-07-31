@@ -12,6 +12,7 @@ import {
     MonthlySellerStatistics
 } from "./stats.types";
 import { ProcessorService } from "../services/processor.service";
+import { stat } from "fs";
 
 @Injectable()
 export class StatsService {
@@ -141,6 +142,8 @@ export class StatsService {
             if (mailingId) {
                 // Конвертируем number в string для Go API
                 const response = await fetch(`${goWorkerUrl}/api/v1/mailings/${mailingId.toString()}/metrics`);
+
+
                 if (response.ok) {
                     workerMetrics = await response.json();
                 } else {
@@ -152,22 +155,31 @@ export class StatsService {
             // Игнорируем ошибки получения метрик воркера
         }
 
+        console.log('wo', workerMetrics);
+
+
         // Используем данные воркера как основной источник, с fallback на разумные значения по умолчанию
         const now = new Date();
+        let averageSpeed = 0;
+        if (workerMetrics && typeof workerMetrics.messages_per_sec === 'number') {
+            averageSpeed = workerMetrics.messages_per_sec;
+        } else if (queue?.totalUsers && queue?.createdAt && queue?.updatedAt) {
+            const durationMs = queue.updatedAt.getTime() - queue.createdAt.getTime();
+            if (durationMs > 0) {
+                averageSpeed = queue.totalUsers / (durationMs / 1000);
+            }
+        }
         return {
             totalClicks: reservation.viewCount || 0,
             uniqueClicks: reservation.viewCount || 0,
-            userStats: { new: 0, dead: 0, premium: 0, rtl: 0 },
-            conversionStats: { performedActions: 0, passedSponsors: 0, leftAfterStart: 0 },
-            audienceAnalysis: {},
-            // Используем данные воркера если доступны, иначе значения по умолчанию
             totalSent: workerMetrics?.sent_messages || queue?.sentCount || 0,
             totalFailed: workerMetrics?.failed_messages || queue?.failedCount || 0,
             totalUsers: workerMetrics?.total_messages || queue?.totalUsers || 0,
-            averageSpeed: workerMetrics?.messages_per_sec || 0,
-            // Используем время из метрик воркера или время резервации
-            queueStart: workerMetrics?.start_time ? new Date(workerMetrics.start_time) : reservation.date,
+            averageSpeed,
+            queueStart: workerMetrics?.start_time ? new Date(workerMetrics.start_time) : queue?.createdAt || now,
             queueEnd: workerMetrics?.last_update_time ? new Date(workerMetrics.last_update_time) : queue?.updatedAt || now,
+            isFinished: workerMetrics === null,
+            username: reservation.botSeller.link || '',
         };
     }
 
@@ -264,6 +276,16 @@ export class StatsService {
             where: { id: reservationId },
             include: { mailing: true }
         });
+        console.log('queueStart:', stats.queueStart, typeof stats.queueStart);
+        console.log('queueEnd:', stats.queueEnd, typeof stats.queueEnd);
+
+        const start = typeof stats.queueStart === 'string' ? new Date(stats.queueStart) : stats.queueStart;
+        const end = typeof stats.queueEnd === 'string' ? new Date(stats.queueEnd) : stats.queueEnd;
+        const queueDurationMs = end.getTime() - start.getTime();
+        const hours = Math.floor(queueDurationMs / (1000 * 60 * 60));
+        const minutes = Math.floor((queueDurationMs % (1000 * 60 * 60)) / (1000 * 60));
+        const formattedQueueDuration = `${hours} ч. ${minutes} мин.`;
+
 
         // Получаем метрики воркера из Go сервиса
         let workerMetrics = '';
@@ -276,12 +298,10 @@ export class StatsService {
                 if (response.ok) {
                     const metrics = await response.json();
                     workerMetrics = `
-📊 Метрики воркера (Redis):
-├FLOOD_WAIT событий: ${metrics.flood_wait_count}
-├Общее время FLOOD_WAIT: ${metrics.total_flood_wait_sec}s
-└Последнее обновление: ${new Date(metrics.last_update_time).toLocaleString()}`;
+├ Флудов: <code>${metrics.flood_count || 0}</code>
+├ Общее время флудов: <code>${metrics.total_flood_time || 0} сек </code>`;
                 } else {
-                    workerMetrics = `\n(Метрики воркера недоступны: HTTP ${response.status})`;
+                    workerMetrics = ``;
                 }
             } else {
                 workerMetrics = `\n(ID рассылки не найден)`;
@@ -291,34 +311,20 @@ export class StatsService {
         }
 
         return `
-🤖 Статистика бота
+Рассылка: ${stats.username}
 
-Всего переходов: ${stats.totalClicks}
-└Уникальных: ${stats.uniqueClicks}
+${stats.isFinished ? '<b>✅ Рассылка завершена</b>' : '<i>⏳ Рассылка в процессе</i>'}
 
-👥 Статистика пользователей
-├Новых: ${stats.userStats.new} (${this.getPercentage(stats.userStats.new, total)})
-├Мертвых: ${stats.userStats.dead} (${this.getPercentage(stats.userStats.dead, total)})
-├Премиум: ${stats.userStats.premium} (${this.getPercentage(stats.userStats.premium, total)})
-└RTL: ${stats.userStats.rtl} (${this.getPercentage(stats.userStats.rtl, total)})
+<b>Аудитория</b>
+├ На момент запуска: <code>${stats.totalUsers}</code>
+├ Успешно: <code>${stats.totalSent}</code>
+└ Блокировали: <code>${stats.totalFailed}</code>
 
-🚪 Статистика проходимости
-├Выполнили действие: ${stats.conversionStats.performedActions} (${this.getPercentage(stats.conversionStats.performedActions, total)})
-├Прошли спонсоров: ${stats.conversionStats.passedSponsors} (${this.getPercentage(stats.conversionStats.passedSponsors, total)})
-└Ушли после старта: ${stats.conversionStats.leftAfterStart} (${this.getPercentage(stats.conversionStats.leftAfterStart, total)})
-
-✉️Статистика рассылки:
-Всего пользователей: ${stats.totalUsers}
-Всего отправлено: ${stats.totalSent}
-Всего неудачно: ${stats.totalFailed}
-⏱️ Средняя скорость рассылки: ${stats.averageSpeed.toFixed(2)} сообщений/сек
-
-🕒 Время начала очереди: ${stats.queueStart.toString()}
-🕔 Время окончания очереди: ${stats.queueEnd.toString()}
-
+<b>Скорость</b>
 ${workerMetrics}
+└ Средняя: <code>${stats.averageSpeed}/сек</code>
 
-
+${!stats.isFinished ? '<i>Начато ' + stats.queueStart.toString() + '</i>' : '<i>Выполнено за ' + formattedQueueDuration + '\nЗавершено: ' + stats.queueEnd.toString() + '</i>'}
         `
     }
 

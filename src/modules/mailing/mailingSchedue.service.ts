@@ -90,7 +90,7 @@ export class MailingScheduleService {
 
         // Фильтруем только активные и одобренные
         const validReservations = allReservations.filter(r =>
-            r.mailing?.isActive && r.mailing?.status === 'APPROVED'
+            r.mailing?.status === 'APPROVED'
         );
 
         this.logger.log(`Valid reservations found: ${validReservations.length}`);

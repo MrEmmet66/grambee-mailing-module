@@ -50,8 +50,10 @@ export class ProcessorService {
             where: { botSellerId: botSeller.id, mailingId: mailing.id }
         });
         const inviteLink = reservation.trackingLink || mailing.link;
-        const buttonText = mailing.postButtons?.toString() || '';
-        const inlineKeyboard = this.createButtonWithInviteLink(buttonText, inviteLink);
+        const buttonArray = Array.isArray(mailing.postButtons)
+            ? mailing.postButtons.filter((b): b is string => typeof b === 'string')
+            : [];
+        const inlineKeyboard = this.createButtonWithInviteLink(buttonArray, inviteLink);
         if (botSeller.isChannel) {
             await this.sendToChannel(botSeller, mailing, inlineKeyboard, reservation.id);
         } else {
@@ -358,19 +360,13 @@ export class ProcessorService {
         }
     }
 
-    createButtonWithInviteLink(buttonText: string, inviteLink: string) {
-        if (!buttonText || !inviteLink) {
+    createButtonWithInviteLink(buttons: string[], inviteLink: string) {
+        if (!Array.isArray(buttons) || buttons.length === 0 || !inviteLink) {
             return undefined;
         }
+        // Строим клавиатуру: каждая кнопка — отдельный объект с текстом из массива и ссылкой
         return {
-            inline_keyboard: [
-                [
-                    {
-                        text: buttonText,
-                        url: inviteLink
-                    }
-                ]
-            ]
+            inline_keyboard: buttons.map(text => ([{ text, url: inviteLink }]))
         };
     }
 

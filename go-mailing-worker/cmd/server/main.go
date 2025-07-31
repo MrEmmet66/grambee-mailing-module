@@ -275,7 +275,7 @@ func runWorker(redisAddr, redisPassword string, redisDB int, queueName, mailingI
 		consecutiveIdleChecks := 0
 		maxConsecutiveIdleChecks := 3 // УВЕЛИЧИВАЕМ: 3 проверки * 5 секунд = 15 секунд стабильности
 		startTime := time.Now()
-		maxWorkTime := 30 * time.Minute // Максимальное время работы worker - 30 минут
+		maxWorkTime := 16 * time.Hour // Максимальное время работы worker - 16 часов
 		lastLogTime := time.Now()
 
 		for range ticker.C {

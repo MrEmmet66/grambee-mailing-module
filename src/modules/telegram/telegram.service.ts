@@ -297,7 +297,7 @@ export class TelegramService {
         body: JSON.stringify({
           chat_id: chatId,
           text: text,
-          parse_mode: 'HTML',
+          parse_mode: 'Markdown',
           reply_markup: inlineKeyboard
         }),
         // Уменьшаем таймаут для более быстрого обнаружения проблем

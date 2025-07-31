@@ -77,92 +77,98 @@ func (c *Client) SendMediaMessage(chatID string, messageData models.MessageData,
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", c.token, endpoint)
 
-	// Проверяем, является ли это абсолютным путем или относительным
+	// Получаем MAIN_SERVICE_URL из переменных окружения
+	mainServiceUrl := "https://mailingrambee.pro/api/v1"
 	mediaPath := messageData.PostMedia
-	if !filepath.IsAbs(mediaPath) && !strings.HasPrefix(mediaPath, "http") {
-		// Если это относительный путь, добавляем префикс /app/uploads
-		mediaPath = "/app/uploads" + mediaPath
+
+	// Если это относительный путь и MAIN_SERVICE_URL задан, формируем полный URL
+	if !strings.HasPrefix(mediaPath, "http") && mainServiceUrl != "" {
+		// Удаляем '/app' если есть, и ведущий слэш
+		mediaPath = strings.TrimPrefix(mediaPath, "/app")
+		mediaPath = strings.TrimLeft(mediaPath, "/")
+		mediaPath = mainServiceUrl + "/" + mediaPath
+	}
+	logrus.WithField("media_path", mediaPath).Info("[TG] Media path for upload")
+
+	// Если это sendPhoto и mediaPath начинается с http, отправляем как URL
+	if endpoint == "sendPhoto" && strings.HasPrefix(mediaPath, "http") {
+		payload := map[string]interface{}{
+			"chat_id": chatID,
+			"photo":   mediaPath,
+		}
+		if messageData.PostContent != "" {
+			payload["caption"] = messageData.PostContent
+			payload["parse_mode"] = "Markdown"
+		}
+		if keyboard != nil {
+			payload["reply_markup"] = keyboard
+		}
+		return c.makeAPICall(url, payload)
 	}
 
+	// ...multipart file upload как раньше...
 	// Проверяем, существует ли файл
 	if _, err := os.Stat(mediaPath); os.IsNotExist(err) {
 		return fmt.Errorf("media file does not exist: %s", mediaPath)
 	}
 
-	// Создаем multipart form
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
-
-	// Добавляем chat_id
 	writer.WriteField("chat_id", chatID)
-
-	// Добавляем caption если есть
 	if messageData.PostContent != "" {
 		writer.WriteField("caption", messageData.PostContent)
 		writer.WriteField("parse_mode", "Markdown")
 	}
-
-	// Добавляем клавиатуру если есть
 	if keyboard != nil {
 		keyboardJSON, _ := json.Marshal(keyboard)
 		writer.WriteField("reply_markup", string(keyboardJSON))
 	}
-
-	// Добавляем файл
 	file, err := os.Open(mediaPath)
 	if err != nil {
 		return fmt.Errorf("failed to open media file: %w", err)
 	}
 	defer file.Close()
-
 	part, err := writer.CreateFormFile(mediaField, filepath.Base(mediaPath))
 	if err != nil {
 		return fmt.Errorf("failed to create form file: %w", err)
 	}
-
 	_, err = io.Copy(part, file)
 	if err != nil {
 		return fmt.Errorf("failed to copy file: %w", err)
 	}
-
 	writer.Close()
-
-	// Отправляем запрос
 	req, err := http.NewRequest("POST", url, &buf)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-
 	req.Header.Set("Content-Type", writer.FormDataContentType())
-
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(start)
+	logrus.WithFields(logrus.Fields{
+		"url":         url,
+		"duration_ms": duration.Milliseconds(),
+	}).Info("[TG] Request duration")
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
 	defer resp.Body.Close()
-
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return fmt.Errorf("failed to read response: %w", err)
 	}
-
 	var tgResp TelegramResponse
 	if err := json.Unmarshal(respBody, &tgResp); err != nil {
 		return fmt.Errorf("failed to parse response: %w", err)
 	}
-
 	if !tgResp.OK {
 		err := fmt.Errorf("telegram API error: %s", tgResp.Description)
-
-		// Если есть retry_after, добавляем эту информацию в ошибку
 		if tgResp.Parameters != nil && tgResp.Parameters.RetryAfter > 0 {
 			err = fmt.Errorf("telegram API error (retry after %d): %s",
 				tgResp.Parameters.RetryAfter, tgResp.Description)
 		}
-
 		return err
 	}
-
 	return nil
 }
 
@@ -179,7 +185,13 @@ func (c *Client) makeAPICall(url string, payload map[string]interface{}) error {
 
 	req.Header.Set("Content-Type", "application/json")
 
+	start := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(start)
+	logrus.WithFields(logrus.Fields{
+		"url":         url,
+		"duration_ms": duration.Milliseconds(),
+	}).Info("[TG] Request duration")
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}

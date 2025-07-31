@@ -164,25 +164,19 @@ export class BotSellersService {
         const trimmedLine = line.trim();
         if (!trimmedLine) return;
 
-        // Разделяем строку по любому из разделителей: , | пробел
-        const parts = trimmedLine.split(/[,|\s]+/);
-        for (const part of parts) {
-          if (!part) continue;
-          // Если есть двоеточие, берем только до него
-          const telegramId = part.includes(':') ? part.split(':')[0] : part;
-          if (!/^\d+$/.test(telegramId)) {
-            isValid = false;
-            rl.close();
-            reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
-            return;
+        // Универсальный парсинг: достаем все группы цифр из строки
+        const matches = trimmedLine.match(/\d{6,12}/g); // ищем все группы от 6 до 12 цифр подряд
+        if (matches) {
+          for (const telegramId of matches) {
+            // Дополнительная проверка на длину (можно скорректировать диапазон)
+            if (telegramId.length < 6 || telegramId.length > 12) {
+              isValid = false;
+              rl.close();
+              reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 6-12 digits.`));
+              return;
+            }
+            userCount++;
           }
-          if (telegramId.length < 9 || telegramId.length > 10) {
-            isValid = false;
-            rl.close();
-            reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
-            return;
-          }
-          userCount++;
         }
       });
 
@@ -610,8 +604,9 @@ export class BotSellersService {
       by: ['botSellerId'],
       where: {
         botSellerId: { in: sellers.map(s => s.id) },
-        mailing: {
-          isActive: true
+        isProcessed: false,
+        date: {
+          gt: now
         }
       },
       _count: {
