@@ -63,7 +63,7 @@ export class BotSellersController {
     const botSellerData: CreateBotSellerFormData = {
       userId: createBotSellerDto.userId,
       telegramId: createBotSellerDto.telegramId,
-      botToken: createBotSellerDto.botToken || mainBotToken,
+      botToken: createBotSellerDto.botToken || null,
       usersData: createBotSellerDto.usersData,
       description: createBotSellerDto.description,
       fixedPrice: createBotSellerDto.fixedPrice,

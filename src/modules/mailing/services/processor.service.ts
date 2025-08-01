@@ -9,7 +9,7 @@ import { ReservationService } from './reservation.service';
 import { MailingNotifyProps } from 'src/modules/telegram/telegram.types';
 import * as fs from 'fs';
 import * as readline from 'readline';
-import { BotSeller, Mailing, MailingReservation } from '@prisma/client';
+import { BotSeller, Mailing, MailingReservation, MailingTargetBots } from '@prisma/client';
 
 @Injectable()
 export class ProcessorService {
@@ -27,6 +27,29 @@ export class ProcessorService {
         @Inject(forwardRef(() => require('./mailing.service').MailingService))
         private readonly mailingService: any,
     ) { }
+
+    /**
+     * Определяет финальные данные поста для отправки
+     * Если targetBot имеет свой контент - используем его, иначе берем из mailing
+     */
+    private getPostData(mailing: Mailing, targetBot: MailingTargetBots) {
+        return {
+            postContent: targetBot.postContent || mailing.postContent,
+            postMedia: targetBot.postMedia || mailing.postMedia,
+            postMediaType: targetBot.postMediaType || mailing.postMediaType,
+            buttonArray: this.extractButtonArray(targetBot.postButtons || mailing.postButtons)
+        };
+    }
+
+    /**
+     * Извлекает массив строк кнопок из JSON
+     */
+    private extractButtonArray(buttons: any): string[] {
+        if (Array.isArray(buttons)) {
+            return buttons.filter((b): b is string => typeof b === 'string');
+        }
+        return [];
+    }
 
     async processMailing(reservation: MailingReservation) {
         const mailing = await this.prismaService.mailing.findUnique({
@@ -49,15 +72,20 @@ export class ProcessorService {
         const targetBot = await this.prismaService.mailingTargetBots.findFirst({
             where: { botSellerId: botSeller.id, mailingId: mailing.id }
         });
+        if (!targetBot) {
+            this.logger.error(`Target bot for mailing ${mailing.id} not found`);
+            throw new Error(`Target bot for mailing ${mailing.id} not found`);
+        }
         const inviteLink = reservation.trackingLink || mailing.link;
-        const buttonArray = Array.isArray(mailing.postButtons)
-            ? mailing.postButtons.filter((b): b is string => typeof b === 'string')
-            : [];
-        const inlineKeyboard = this.createButtonWithInviteLink(buttonArray, inviteLink);
+        
+        // Получаем финальные данные поста для отправки
+        const postData = this.getPostData(mailing, targetBot);
+        const inlineKeyboard = this.createButtonWithInviteLink(postData.buttonArray, inviteLink);
+        
         if (botSeller.isChannel) {
-            await this.sendToChannel(botSeller, mailing, inlineKeyboard, reservation.id);
+            await this.sendToChannel(botSeller, postData, inlineKeyboard, reservation.id);
         } else {
-            await this.sendToBotUsers(botSeller, mailing, inlineKeyboard, reservation.id);
+            await this.sendToBotUsers(botSeller, postData, inlineKeyboard, reservation.id);
         }
         await this.prismaService.mailingReservation.update({
             where: { id: reservation.id },
@@ -83,22 +111,23 @@ export class ProcessorService {
         await this.applicationsService.notifyAdminsAboutMailingExecution(props);
     }
 
-    async sendToChannel(botSeller, mailing, buttons, reservationId?: number) {
+    async sendToChannel(botSeller: any, postData: any, buttons: any, reservationId?: number) {
+        const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
         try {
             this.logger.log(`Sending message to channel ${botSeller.channelId}`);
             const inlineKeyboard = this.telegramService.buildInlineKeyboard(buttons);
             let sentMessage;
-            if (mailing.postMedia) {
-                sentMessage = await this.telegramService.sendMediaMessage(botSeller.botToken, botSeller.channelId, mailing, inlineKeyboard);
+            if (postData.postMedia) {
+                sentMessage = await this.telegramService.sendMediaMessage(mainBotToken, botSeller.channelId, postData, inlineKeyboard);
             } else {
-                sentMessage = await this.telegramService.sendTextMessage(botSeller.botToken, botSeller.channelId, mailing.postContent, inlineKeyboard);
+                sentMessage = await this.telegramService.sendTextMessage(mainBotToken, botSeller.channelId, postData.postContent || '', inlineKeyboard);
             }
             this.logger.log(`Successfully sent message to channel ${botSeller.channelId}`);
             // --- Forward message to ADMIN_CHAT_ID if isChannel ---
             if (botSeller.isChannel && sentMessage && sentMessage.result && sentMessage.result.message_id && reservationId) {
                 const adminChatId = this.configService.get('ADMIN_CHAT_ID', '-1002677251791');
                 const topicId = parseInt(this.configService.get('MAILING_NOTIFY_TOPIC_ID', '15'), 10);
-                const forwardUrl = `https://api.telegram.org/bot${botSeller.botToken}/forwardMessage`;
+                const forwardUrl = `https://api.telegram.org/bot${mainBotToken}/forwardMessage`;
                 // Формируем тело запроса
                 const forwardBody: any = {
                     chat_id: adminChatId,
@@ -132,7 +161,7 @@ export class ProcessorService {
         }
     }
 
-    async sendToBotUsers(botSeller: BotSeller, mailing: Mailing, buttons, reservationId: number) {
+    async sendToBotUsers(botSeller: BotSeller, postData: any, buttons: any, reservationId: number) {
 
         if (!botSeller.statisticsFilePath) {
             this.logger.warn(`No statistics file for bot ${botSeller.id}, skipping`);
@@ -140,24 +169,24 @@ export class ProcessorService {
         }
         
         try {
-            this.logger.log(`Processing mailing ${mailing.id} for bot ${botSeller.id} via Go worker`);
+            this.logger.log(`Processing mailing for bot ${botSeller.id} via Go worker`);
             this.logger.log(`Using statistics file URL: ${botSeller.statisticsFilePath}`);
 
             // Подготавливаем данные для отправки в Go микросервис
             const mailingData = {
                 mailing_id: `${reservationId}`,
                 bot_token: botSeller.botToken,
-                users_file_url: botSeller.statisticsFilePath, // Публичный URL файла
+                users_file_url: botSeller.statisticsFilePath,
                 message_data: {
-                    text: mailing.postContent || '',
-                    post_media: mailing.postMedia ? (process.cwd() + mailing.postMedia) : '',
-                    post_media_type: mailing.postMediaType === 'image' ? 'photo' : (mailing.postMediaType || 'photo'),
-                    post_content: mailing.postContent || ''
+                    text: postData.postContent || '',
+                    post_media: postData.postMedia ? (process.cwd() + postData.postMedia) : '',
+                    post_media_type: postData.postMediaType === 'image' ? 'photo' : (postData.postMediaType || 'photo'),
+                    post_content: postData.postContent || ''
                 },
                 inline_keyboard: buttons,
-                rate_limit: 25, // 25 сообщений в секунду по умолчанию
+                rate_limit: 25,
                 admin_chat_id: this.configService.get('MAILINGS_CHAT_ID', '-1002677251791'),
-                admin_message_id: 0 // Будет установлено позже если нужно
+                admin_message_id: 0
             };
 
             // Отправляем запрос в Go микросервис
@@ -175,10 +204,10 @@ export class ProcessorService {
 
             if (response.status === 200) {
                 this.logger.log(`Successfully submitted mailing to Go worker:`, response.data);
-                this.logger.log(`Mailing ${mailing.id} for bot ${botSeller.id} queued in Go worker with ${response.data.total_tasks} tasks`);
+                this.logger.log(`Mailing for bot ${botSeller.id} queued in Go worker with ${response.data.total_tasks} tasks`);
                 
                 // Обновляем статистику рассылки
-                await this.updateMailingStatistics(botSeller, mailing);
+                await this.updateMailingStatistics(botSeller, { id: reservationId });
                 await this.reservationService.createQueueRecord(reservationId, `mailing_${reservationId}`, response.data.total_users);
                 
                 return {

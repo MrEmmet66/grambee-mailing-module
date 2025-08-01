@@ -370,16 +370,7 @@ export class TelegramService {
     if (!botToken || !botToken.includes(':')) {
       throw new Error(`Invalid bot token format`);
     }
-    let mediaType = mailing.postMediaType || 'photo';
-    let endpoint;
-    switch (mediaType.toLowerCase()) {
-      case 'photo': endpoint = 'sendPhoto'; break;
-      case 'video': endpoint = 'sendVideo'; break;
-      case 'document': endpoint = 'sendDocument'; break;
-      case 'audio': endpoint = 'sendAudio'; break;
-      default: endpoint = 'sendPhoto';
-    }
-    const url = `https://api.telegram.org/bot${botToken}/${endpoint}`;
+    const mime = require('mime-types');
     const mediaUrl = process.cwd() + mailing.postMedia;
     if (!fs.existsSync(mediaUrl)) {
       throw new Error(`Media file not found: ${mediaUrl}`);
@@ -388,16 +379,36 @@ export class TelegramService {
     if (stats.size === 0) {
       throw new Error(`Media file is empty: ${mediaUrl}`);
     }
+    // Определяем MIME-тип файла
+    const mimeType = mime.lookup(mediaUrl) || '';
+    let mediaType = mailing.postMediaType || 'photo';
+    let endpoint = 'sendPhoto';
+    let mediaField = 'photo';
+    // Если MIME-тип начинается с image/, всегда используем sendPhoto
+    if (mimeType.startsWith('image/')) {
+      endpoint = 'sendPhoto';
+      mediaField = 'photo';
+      mediaType = 'photo';
+    } else {
+      switch (mediaType.toLowerCase()) {
+        case 'video': endpoint = 'sendVideo'; mediaField = 'video'; break;
+        case 'document': endpoint = 'sendDocument'; mediaField = 'document'; break;
+        case 'audio': endpoint = 'sendAudio'; mediaField = 'audio'; break;
+        default: endpoint = 'sendPhoto'; mediaField = 'photo'; break;
+      }
+    }
+    const url = `https://api.telegram.org/bot${botToken}/${endpoint}`;
     const maxSizes = {
       photo: 10 * 1024 * 1024,
       video: 50 * 1024 * 1024,
       document: 50 * 1024 * 1024,
       audio: 50 * 1024 * 1024
     };
-    if (stats.size > (maxSizes[mediaType.toLowerCase()] || maxSizes.photo)) {
+    if (stats.size > (maxSizes[mediaField] || maxSizes.photo)) {
       throw new Error(`File too large for ${mediaType}: ${stats.size} bytes`);
     }
     try {
+      console.log(`[TelegramService] Sending media message to ${chatId} with media type ${mediaType} (MIME: ${mimeType}) from ${mediaUrl}`);
       const FormData = require('form-data');
       const formData = new FormData();
       formData.append('chat_id', chatId);
@@ -408,9 +419,6 @@ export class TelegramService {
       if (inlineKeyboard) {
         formData.append('reply_markup', JSON.stringify(inlineKeyboard));
       }
-      const mediaField = mediaType.toLowerCase() === 'photo' ? 'photo' :
-        mediaType.toLowerCase() === 'video' ? 'video' :
-        mediaType.toLowerCase() === 'audio' ? 'audio' : 'document';
       formData.append(mediaField, fs.createReadStream(mediaUrl));
       const response = await this.httpService.axiosRef({
         method: 'POST',
@@ -427,9 +435,9 @@ export class TelegramService {
           statusText: response.statusText,
           responseData: response.data,
           headers: response.headers,
-          mediaType: mediaType
+          mediaType: mediaType,
+          mimeType: mimeType
         });
-        
         throw new Error(`Failed to send media message: ${JSON.stringify(response.data)}`);
       }
       const data = response.data;
@@ -445,14 +453,15 @@ export class TelegramService {
         errorResponse: error?.response?.data,
         errorStatus: error?.response?.status,
         mediaType: mediaType,
+        mimeType: mimeType,
         hasResponseData: !!error?.response?.data,
         fullError: error
       });
-      
       if (error.response && error.response.data && error.response.data.description) {
         throw new Error(`Telegram API error: ${error.response.data.description}`);
       }
-      if (mediaType.toLowerCase() !== 'document') {
+      // Fallback на document только если это не image/
+      if (!mimeType.startsWith('image/') && mediaType.toLowerCase() !== 'document') {
         try {
           const documentMailing = { ...mailing, postMediaType: 'document' };
           return await this.sendMediaMessage(botToken, chatId, documentMailing, inlineKeyboard);

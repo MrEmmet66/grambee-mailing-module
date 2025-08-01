@@ -3,7 +3,7 @@ https://docs.nestjs.com/providers#services
 */
 
 import { ConflictException, forwardRef, Inject, Injectable, InternalServerErrorException, Logger, NotAcceptableException, NotFoundException, PreconditionFailedException } from '@nestjs/common';
-import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData } from '../dto/createMailing.dto';
+import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateTargetBotContentFormData } from '../dto/createMailing.dto';
 import { PrismaService } from 'prisma/prisma.service';
 import { TelegramService } from '../../telegram/telegram.service';
 import { HttpService } from '@nestjs/axios';
@@ -22,7 +22,7 @@ import { ProcessorService } from './processor.service';
 
 @Injectable()
 export class MailingService {
-    private readonly logger = new Logger(MailingService.name);    constructor(
+    private readonly logger = new Logger(MailingService.name); constructor(
         private readonly prismaService: PrismaService,
         @Inject(forwardRef(() => ApplicationsService))
         private applicationsService: ApplicationsService,
@@ -33,7 +33,7 @@ export class MailingService {
         private configService: ConfigService,
         private readonly reservationService: ReservationService,
         private readonly processorService: ProcessorService, // добавляем зависимость
-    ) { }    async getMailingOwnerTelegramId(mailingId: number) {
+    ) { } async getMailingOwnerTelegramId(mailingId: number) {
         const mailing = await this.prismaService.mailing.findUnique({
             where: { id: mailingId },
             include: { user: true }
@@ -44,6 +44,21 @@ export class MailingService {
         }
 
         return mailing.user.telegramId;
+    }
+
+    async getMailingTargetBots(mailingId: number): Promise<MailingTargetBots[]> {
+        const targetBots = await this.prismaService.mailingTargetBots.findMany({
+            where: { mailingId: mailingId },
+            include: {
+                botSeller: true
+            }
+        });
+
+        if (!targetBots) {
+            throw new NotFoundException(`No target bots found for mailing ID ${mailingId}`);
+        }
+
+        return targetBots;
     }
 
     async getMailingOwner(mailingId: number) {
@@ -70,6 +85,14 @@ export class MailingService {
             throw new ConflictException(`Mailing with ID ${mailingId} is active and cannot be deleted`);
         }
 
+        const futureMailingReservations = await this.prismaService.mailingReservation.findMany({
+            where: { mailingId: mailingId, isProcessed: false, date: { gt: new Date() } }
+        });
+
+        if (futureMailingReservations.length > 0) {
+            throw new PreconditionFailedException(`Рассылка забронирована на будущее и не может быть удалена`);
+        }
+
         // Delete all reservations for this mailing
         await this.prismaService.mailingReservation.deleteMany({
             where: { mailingId: mailingId }
@@ -83,7 +106,8 @@ export class MailingService {
         return await this.prismaService.mailing.delete({
             where: { id: mailingId }
         });
-    }    async updateMailingContent(mailingId: number, updateData: UpdateMailingContentFormData) {
+    }
+    async updateMailingContent(mailingId: number, updateData: UpdateMailingContentFormData) {
         return await this.prismaService.mailing.update({
             where: { id: mailingId },
             data: {
@@ -94,6 +118,54 @@ export class MailingService {
             }
         });
 
+    }
+
+    async updateMailingTargetBotContent(targetBotId: number, updateData: UpdateTargetBotContentFormData) {
+        const targetBot = await this.prismaService.mailingTargetBots.findUnique({
+            where: { id: targetBotId }
+        });
+
+        if (!targetBot) {
+            throw new NotFoundException(`Target bot with ID ${targetBotId} not found`);
+        }
+
+        // If there was a previous media file and it's being replaced, delete the old file
+        if (targetBot.postMedia && updateData.media) {
+            const oldPath = targetBot.postMedia.startsWith('/uploads/')
+                ? targetBot.postMedia
+                : `/uploads/${targetBot.postMedia}`;
+            const fullPath = require('path').join(process.cwd(), oldPath);
+            const fs = require('fs');
+            if (fs.existsSync(fullPath)) {
+                try {
+                    fs.unlinkSync(fullPath);
+                } catch (e) {
+                    this.logger?.warn?.(`Failed to delete old media file: ${fullPath}`);
+                }
+            }
+        }
+
+        // Only update postMedia if new media is provided
+        const updatePayload: any = {
+            postContent: updateData.content,
+            postMediaType: updateData.mediaType,
+            postButtons: updateData.buttons // Store buttons as JSON string
+        };
+        if (updateData.media) {
+            updatePayload.postMedia = `/uploads/${updateData.media.filename}`;
+        }
+
+        if(updateData.link) {
+            updatePayload.postLink = updateData.link;
+        }
+
+        return await this.prismaService.mailingTargetBots.update({
+            where: { id: targetBotId },
+            data: updatePayload,
+            include: {
+                botSeller: true
+            }
+        });
     }
 
     async updateMailingReservationForwardedMessage(reservationId: number, messageId: number) {
@@ -111,6 +183,17 @@ export class MailingService {
                 forwardedMessageId: String(messageId) // Store as string to avoid issues with large numbers
             }
         });
+    }
+
+    async getMailingTargetBot(mailingId: number, botSellerId: number): Promise<MailingTargetBots | null> {
+        const mailingTargetBot = await this.prismaService.mailingTargetBots.findFirst({
+            where: {
+                mailingId: mailingId,
+                botSellerId: botSellerId
+            }
+        });
+
+        return mailingTargetBot;
     }
 
 
@@ -134,7 +217,6 @@ export class MailingService {
         this.logger.log(`Creating mailing with data: ${JSON.stringify({
             userId: dto.userId,
             link: dto.link,
-            isChannel: !!dto.isChannel,
             hasMedia: !!dto.media,
             contentLength: dto.content?.length || 0,
             buttons: Array.isArray(dto.buttons) ? dto.buttons : [dto.buttons]
@@ -176,7 +258,6 @@ export class MailingService {
                 data: {
                     userId: user.id,
                     link: dto.link || '',
-                    isChannel: dto.isChannel,
                     postContent: dto.content,
                     postMediaType: dto.mediaType,
                     postMedia: mediaPath,
@@ -200,7 +281,7 @@ export class MailingService {
     async getUserMailings(userId: number) {
         this.logger.log(`Getting mailings for user ID: ${userId}`);
         console.log(`Getting mailings for user ID: ${userId}`);
-        
+
         return await this.prismaService.mailing.findMany({
             where: {
                 user: { telegramId: String(userId) } // Support both ID and Telegram ID
@@ -240,7 +321,7 @@ export class MailingService {
 
         if (mailing.isActive) {
             throw new ConflictException('Mailing is already active');
-        }        return await this.prismaService.mailing.update({
+        } return await this.prismaService.mailing.update({
             where: {
                 id: mailingId
             },
@@ -248,7 +329,7 @@ export class MailingService {
                 isActive: !mailing.isActive
             }
         });
-    }    async processMailing(reservation) {
+    } async processMailing(reservation) {
         return this.processorService.processMailing(reservation);
     }
 
@@ -280,7 +361,7 @@ export class MailingService {
         const views = await this.getMessageViews(chatId, messageId);
         this.logger.log(`Message ${messageId} has ${views} views`);
 
-        if(views > reservation.viewCount) {
+        if (views > reservation.viewCount) {
             await this.prismaService.mailingReservation.update({
                 where: {
                     id: reservation.id

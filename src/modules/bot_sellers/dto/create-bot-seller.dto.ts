@@ -40,7 +40,7 @@ export class CreateBotSellerDto {
 
   @ApiProperty({ description: 'Ссылка на бота' })
   @IsString()
-  @IsNotEmpty()
+  @ValidateIf(o => o.isChannel === 'true')
   link: string;
 
 
@@ -53,11 +53,11 @@ export class CreateBotSellerDto {
 export interface CreateBotSellerFormData {
   userId?: number;
   telegramId?: string;
-  botToken: string;
+  botToken?: string | null;
   usersData?: any;
   description?: string;
   fixedPrice?: number;
-  link: string;
+  link?: string;
   isChannel?: boolean;
   statisticsFile?: Express.Multer.File;
 }

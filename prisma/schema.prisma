@@ -64,7 +64,7 @@ enum QueueStatus {
 model BotSeller {
   id Int @id @default(autoincrement())
   userId Int
-  botToken String
+  botToken String?
   usersData Json
   description String?
   createdAt DateTime @default(now())
@@ -78,6 +78,8 @@ model BotSeller {
   channelId String?                       // ID канала, если isChannel = true
   statisticsFilePath String?               // путь к файлу статистики бота
   title String?                     // название бота
+  avatarUrl String?                // URL аватара бота
+
 
   // Bot statistics
   totalBotAudience Int? @default(0) // общая аудитория бота
@@ -134,7 +136,7 @@ model ReservationQueue {
   updatedAt DateTime @updatedAt
   
 
-  mailingReservation MailingReservation @relation(fields: [mailingReservationId], references: [id])
+  mailingReservation MailingReservation @relation(fields: [mailingReservationId], references: [id], onDelete: Cascade)
 }
 
 model Mailing {
@@ -143,7 +145,6 @@ model Mailing {
   botToken String?
 
   channelId String? // ID канала, если isChannel = true
-  isChannel Boolean @default(false)
 
   link String // Ссылка на бота
   
@@ -170,6 +171,13 @@ model MailingTargetBots {
   botSellerId Int
   mailingId Int
   paymentType String @default("fixed")
+    // post
+  postContent String?
+  postButtons Json?
+  postMedia String?
+  postMediaType String?
+  postLink String?
+
 
   botSeller BotSeller @relation(fields: [botSellerId], references: [id])
   mailing Mailing @relation(fields: [mailingId], references: [id])

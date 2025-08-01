@@ -213,7 +213,7 @@ export class ReservationService {
         }
 
         // Получаем комиссии сервиса из конфига
-        const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
+        const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 10);
         const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.00005);
         const serviceDefaultSubscriberPrice = this.configService.get<number>('SERVICE_DEFAULT_SUBSCRIBER_PRICE', 0.0005);
         const serviceChannelDefaultSubscriberPrice = this.configService.get<number>('SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE', 0.0002);
@@ -249,10 +249,11 @@ export class ReservationService {
             let serviceCommission = 0;
             if (dto.paymentType === 'fixed') {
                 baseAmount = Number(botSeller.fixedPrice) || 0;
-                serviceCommission = Number(serviceCommissionFixed) || 0;
+                // Комиссия всегда процент от стоимости продавца
+                serviceCommission = baseAmount * ((Number(serviceCommissionFixed) || 0) / 100);
                 heldAmount = baseAmount + serviceCommission;
             } else if (dto.paymentType === 'subscriber') {
-                if (mailing.isChannel) {
+                if (botSeller.isChannel) {
                     baseAmount = Number(botSeller.fixedPrice) || 0;
                     serviceCommission = Number(serviceCommissionPerUser) || 0;
                 } else {
@@ -267,7 +268,8 @@ export class ReservationService {
                 heldAmount = baseAmount + serviceCommission;
             } else {
                 baseAmount = Number(botSeller.fixedPrice) || 0;
-                serviceCommission = Number(serviceCommissionFixed) || 0;
+                // Комиссия всегда процент от стоимости продавца
+                serviceCommission = baseAmount * ((Number(serviceCommissionFixed) || 0) / 100);
                 heldAmount = baseAmount + serviceCommission;
             }
             if (isNaN(heldAmount) || heldAmount <= 0) {
@@ -278,7 +280,7 @@ export class ReservationService {
                 this.logger.log(`Holding balance for mailing reservation: ${heldAmount} (date: ${date})`);
                 await this.balanceService.holdBalance(user.telegramId.toString(), {
                     amount: Number(heldAmount.toFixed(2)),
-                    description: `Удержание баланса за резервирование рассылки #${dto.mailingId} для канала ${botSeller.link} на дату ${date}. Базовая стоимость: ${baseAmount}, комиссия сервиса: ${serviceCommission}.`
+                    description: `Оплата рассылки для канала ${botSeller.link} на дату ${date}.`
                 });
             } catch (error) {
                 this.logger.error(`Failed to hold balance for mailing reservation (date: ${date}): ${error.message}`);
@@ -312,7 +314,7 @@ export class ReservationService {
                 data: {
                     botSellerId: dto.sellerId,
                     mailingId: dto.mailingId,
-                    paymentType: dto.paymentType || 'fixed',
+                    paymentType: dto.paymentType || 'fixed'
                 }
             });
         }
@@ -462,7 +464,14 @@ async completeQueue(dto: CompleteMailingDto) {
     }
 
     const reservationId = queueRecord.mailingReservationId;
-    
+
+    await this.prismaService.botSeller.update({
+        where: { id: queueRecord.mailingReservation.botSellerId },
+        data: {
+            botLiveAudience: dto.sentCount
+        }
+    });
+
     // Обновляем viewCount в mailing reservation (это количество успешно отправленных сообщений)
     await this.prismaService.mailingReservation.update({
         where: { id: reservationId },

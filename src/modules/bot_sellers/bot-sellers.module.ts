@@ -9,6 +9,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { ConfigModule } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
+import { AvatarService } from './avatar.service';
 
 const uploadDir = join(process.cwd(), 'uploads/bot_users');
 if (!existsSync(uploadDir)) {
@@ -23,7 +24,7 @@ if (!existsSync(uploadDir)) {
     HttpModule,
   ],
   controllers: [BotSellersController],
-  providers: [BotSellersService],
-  exports: [BotSellersService],
+  providers: [BotSellersService, AvatarService],
+  exports: [BotSellersService, AvatarService],
 })
 export class BotSellersModule {} 

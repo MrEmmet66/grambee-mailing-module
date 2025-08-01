@@ -35,7 +35,7 @@ export class MailingPaymentService {
             throw new Error(`Mailing reservation with ID ${mailingReservationId} already has an admin approval status`);
         }
 
-        if (reservation.mailing.isChannel === true) {
+        if (reservation.botSeller.isChannel === true) {
             await this.mailingService.updateChannelViews(reservation);
         }
         
@@ -59,13 +59,15 @@ export class MailingPaymentService {
         if (targetBot?.paymentType === 'fixed') {
             // Фиксированная оплата
             sellerAmount = Number(reservation.botSeller.fixedPrice) || 0;
-            serviceCommission = Number(this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25)) || 0;
+            // Комиссия теперь процент от стоимости продавца
+            const commissionPercent = Number(this.configService.get<number>('SERVICE_COMMISSION_FIXED', 10)) || 0;
+            serviceCommission = sellerAmount * (commissionPercent / 100);
             totalPayment = sellerAmount + serviceCommission;
 
         } else if (targetBot?.paymentType === 'per_subscriber') {
             // Оплата за подписчика - считаем по факту переходов
 
-            const pricePerSubscriber = reservation.mailing.isChannel ? Number(serviceChannelDefaultSubscriberPrice) : Number(serviceDefaultSubscriberPrice);
+            const pricePerSubscriber = reservation.botSeller.isChannel ? Number(serviceChannelDefaultSubscriberPrice) : Number(serviceDefaultSubscriberPrice);
             const serviceCommissionPerUser = Number(this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.00005)) || 0;
 
             sellerAmount = pricePerSubscriber * entranceCount;

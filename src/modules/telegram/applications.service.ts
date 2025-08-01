@@ -144,13 +144,11 @@ export class ApplicationsService {
         }
 
         // Determine if this is a channel or bot mailing
-        const targetType = mailing.isChannel ? 'Канал' : 'Бот';
         const targetLink = mailing.link;
 
         const message =
             `<b>📨 НОВАЯ ЗАЯВКА НА РАССЫЛКУ</b>\n\n` +
             `<b>👤 Пользователь:</b> @${mailingOwner.username}\n` +
-            `<b>🎯 Тип цели:</b> ${targetType}\n` +
             `<b>🔗 Ссылка:</b> ${targetLink}\n` +
             `<b>📅 Дата создания:</b> ${new Date().toLocaleString('ru-RU')}\n` +
             `<b>📝 Контент:</b>\n<pre>${mailing.postContent}</pre>\n\n` +

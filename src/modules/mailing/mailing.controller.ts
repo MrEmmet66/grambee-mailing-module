@@ -5,7 +5,7 @@ https://docs.nestjs.com/controllers#controllers
 import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete, UseGuards } from '@nestjs/common';
 import { MailingService } from './services/mailing.service';
 import { ReservationService } from './services/reservation.service';
-import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateMailingContentDto } from './dto/createMailing.dto';
+import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateMailingContentDto, UpdateTargetBotContentFormData } from './dto/createMailing.dto';
 import { CreateMailingReservationDto } from './dto/createMailingReservation.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
@@ -73,7 +73,6 @@ export class MailingController {
 
         // Convert userId from string to integer if needed
         const userId = typeof dto.userId === 'string' ? parseInt(dto.userId, 10) : dto.userId;
-        const isChannel = dto.isChannel === 'true'
 
         // Prepare data for the service
         let buttons: string[] = [];
@@ -124,7 +123,6 @@ export class MailingController {
             buttons,
             media: file,
             link: dto.link, // Optional field
-            isChannel: isChannel
         };
 
         // Call the service to create the mailing
@@ -208,6 +206,80 @@ export class MailingController {
 
         return await this.mailingService.updateMailingContent(mailingId, updateDataWithFile);
     }
+
+    @Patch('/targetBot/:id')
+    @ApiOperation({ summary: 'Обновить пост бота' })
+    @ApiConsumes('multipart/form-data')
+    @ApiParam({ name: 'id', description: 'ID поста бота' })
+    @ApiBody({
+        description: 'Данные для обновления поста бота с возможностью загрузки медиа-файла',
+        type: UpdateMailingContentDto
+    })
+    @ApiResponse({ status: 200, description: 'Контент поста бота успешно обновлен.' })
+    @ApiResponse({ status: 404, description: 'Пост бота не найден.' })
+    @UseInterceptors(FileInterceptor('media', {
+        storage: diskStorage({
+            destination: './uploads',
+            filename: (req, file, cb) => {
+                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+                const ext = extname(file.originalname);
+                cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
+            },
+        }),
+    }))
+    async updateTargetBotContent(
+        @Param('id') id: string,
+        @Body() updateData: UpdateTargetBotContentFormData,
+        @UploadedFile(
+            new ParseFilePipeBuilder()
+                .addMaxSizeValidator({
+                    maxSize: 10 * 1024 * 1024, // 10MB
+                })
+                .build({
+                    errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+                    fileIsRequired: false, // File is optional for updates
+                }),
+        ) file: Express.Multer.File
+    ) {
+        const targetBotId = parseInt(id, 10);
+
+        if (!updateData.content) {
+            throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
+        }
+
+
+        // Add the uploaded file to the update data
+        let buttons: string[] = [];
+        console.log('RAW BUTTONS (update):', updateData.buttons);
+        if (updateData.buttons) {
+            if (typeof updateData.buttons === 'string') {
+                try {
+                    const parsed = JSON.parse(updateData.buttons);
+                    console.log('PARSED BUTTONS (update):', parsed);
+                    if (Array.isArray(parsed)) {
+                        buttons = parsed;
+                    } else {
+                        buttons = [];
+                    }
+                } catch (e) {
+                    console.log('BUTTONS PARSE ERROR (update):', e);
+                    buttons = [];
+                }
+            } else if (Array.isArray(updateData.buttons)) {
+                buttons = updateData.buttons;
+            }
+        }
+        const updateDataWithFile: UpdateTargetBotContentFormData = {
+            ...updateData,
+            media: file,
+            buttons
+        };
+
+        console.log('data:', updateDataWithFile);
+
+        return await this.mailingService.updateMailingTargetBotContent(targetBotId, updateDataWithFile);
+    }
+
 
     @Patch(':id/toggle')
     @ApiOperation({ summary: 'Включить/выключить рассылку' })
@@ -409,6 +481,17 @@ export class MailingController {
         }
 
         return await this.reservationService.getMailingsByDate(parsedDate, sellerId);
+    }
+
+    @Get('/targetBots/:id')
+    async getMailingTargetBots(@Param('id') id: string) {
+        const mailingId = parseInt(id, 10);
+
+        if (isNaN(mailingId)) {
+            throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
+        }
+
+        return await this.mailingService.getMailingTargetBots(mailingId);
     }
 
     @Get('reservations/:id/can-cancel')

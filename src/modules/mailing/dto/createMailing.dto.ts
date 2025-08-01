@@ -21,12 +21,6 @@ export class CreateMailingDto {
     })
     link?: string;
 
-    @ApiProperty({
-        description: 'Флаг, указывающий на тип рассылки (канал или бот)',
-        example: false,
-        required: false
-    })
-    isChannel?: boolean;
 
     @ApiProperty({ 
         description: 'Содержимое рассылки (текст)', 
@@ -63,7 +57,6 @@ export interface CreateMailingFormData {
     botToken?: string;
     userId: number;
     link?: string;
-    isChannel?: string;
     content: string;
     mediaType?: string;
     buttons: string | string[];
@@ -74,6 +67,13 @@ export interface UpdateMailingContentFormData {
     mediaType?: string;
     media?: Express.Multer.File;
     buttons: string | string[];
+}
+export interface UpdateTargetBotContentFormData {
+    content: string;
+    mediaType?: string;
+    media?: Express.Multer.File;
+    buttons: string | string[];
+    link?: string;
 }
 
 export class UpdateMailingContentDto {
