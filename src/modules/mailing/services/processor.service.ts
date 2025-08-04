@@ -44,9 +44,14 @@ export class ProcessorService {
     /**
      * Извлекает массив строк кнопок из JSON
      */
-    private extractButtonArray(buttons: any): string[] {
-        if (Array.isArray(buttons)) {
-            return buttons.filter((b): b is string => typeof b === 'string');
+    private extractButtonArray(buttons: any): string[][] {
+        // Если это массив массивов строк — возвращаем как есть
+        if (Array.isArray(buttons) && Array.isArray(buttons[0])) {
+            return buttons;
+        }
+        // Если это массив строк — оборачиваем каждую строку в отдельный ряд
+        if (Array.isArray(buttons) && buttons.every(b => typeof b === 'string')) {
+            return buttons.map(b => [b]);
         }
         return [];
     }
@@ -389,13 +394,18 @@ export class ProcessorService {
         }
     }
 
-    createButtonWithInviteLink(buttons: string[], inviteLink: string) {
+    createButtonWithInviteLink(buttons: string[][], inviteLink: string) {
         if (!Array.isArray(buttons) || buttons.length === 0 || !inviteLink) {
             return undefined;
         }
-        // Строим клавиатуру: каждая кнопка — отдельный объект с текстом из массива и ссылкой
+        // Всегда ожидается массив массивов строк
+        // [["A", "B"], ["C"]] -> несколько кнопок в ряд
         return {
-            inline_keyboard: buttons.map(text => ([{ text, url: inviteLink }]))
+            inline_keyboard: buttons.map(row =>
+                Array.isArray(row)
+                    ? row.map(text => ({ text, url: inviteLink }))
+                    : [{ text: row, url: inviteLink }]
+            )
         };
     }
 

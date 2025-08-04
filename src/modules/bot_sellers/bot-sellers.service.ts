@@ -697,6 +697,97 @@ export class BotSellersService {
     });
   }
 
+  async lockDay(date: Date, botSellerId: number) {
+    // Проверяем, что дата не в прошлом
+    const now = new Date();
+    if (date < now) {
+      throw new BadRequestException('Нельзя заблокировать день в прошлом');
+    }
+
+    // Проверяем, что бот-продавец существует
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+    });
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    // Проверяем, что день не заблокирован
+    const existingLock = await this.prisma.lockedDays.findFirst({
+      where: {
+        date: date,
+        botSellerId: botSellerId,
+      },
+    });
+
+    if (existingLock) {
+      throw new BadRequestException(`День ${date.toISOString().split('T')[0]} уже заблокирован для этого бота`);
+    }
+    
+
+    return this.prisma.lockedDays.create({
+      data: {
+        date,
+        botSellerId,
+      },
+    });
+  }
+
+  async getLockedDays(botSellerId: number) {
+    // Проверяем, что бот-продавец существует
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+    });
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    return this.prisma.lockedDays.findMany({
+      where: { botSellerId, date: { gte: new Date() } },
+      orderBy: { date: 'asc' },
+    });
+  }
+
+  async unblockDay(date: Date, botSellerId: number) {
+    // Проверяем, что дата не в прошлом
+    const now = new Date();
+    if (date < now) {
+      throw new BadRequestException('Нельзя разблокировать день в прошлом');
+    }
+
+    // Проверяем, что бот-продавец существует
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+    }); 
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    // Проверяем, что день заблокирован
+    const existingLock = await this.prisma.lockedDays.findFirst({
+      where: {
+        date: date,
+        botSellerId: botSellerId,
+      },
+    });
+    
+    if (!existingLock) {
+      throw new BadRequestException(`День ${date.toISOString().split('T')[0]} не заблокирован для этого бота`);
+    }
+
+    // Удаляем блокировку дня
+    return this.prisma.lockedDays.delete({
+      where: {
+        id: existingLock.id,
+      },
+    });
+  }
+
+
+
   async uploadStatistics(id: number, statisticsFile: Express.Multer.File) {
     const botSeller = await this.prisma.botSeller.findUnique({
       where: { id },

@@ -243,6 +243,17 @@ export class ReservationService {
                 throw new ConflictException(`Mailing day already reserved: ${date}`);
             }
 
+            const lockedDay = await this.prismaService.lockedDays.findFirst({
+                where: {
+                    date: date,
+                    botSellerId: dto.sellerId,
+                }
+            });
+            if (lockedDay) {
+                throw new ConflictException(`Этот день занят. Пожалуйста, выберите другой.`);
+            }
+
+
             // Расчет стоимости и комиссии
             let heldAmount = 0;
             let baseAmount = 0;

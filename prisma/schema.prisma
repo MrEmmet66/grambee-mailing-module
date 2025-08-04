@@ -100,6 +100,8 @@ model BotSeller {
   mailingReservations MailingReservation[]
 
   MailingTargetBots MailingTargetBots[]
+
+  LockedDays LockedDays[]
 }
 
 model MailingReservation {
@@ -183,6 +185,10 @@ model MailingTargetBots {
   mailing Mailing @relation(fields: [mailingId], references: [id])
 }
 
+model LockedDays {
+  id Int @id @default(autoincrement())
+  date DateTime
+  botSellerId Int
 
-
-
+  botSeller BotSeller @relation(fields: [botSellerId], references: [id])
+}

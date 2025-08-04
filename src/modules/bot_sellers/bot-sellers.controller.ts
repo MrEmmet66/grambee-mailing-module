@@ -7,6 +7,7 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { ConfigService } from '@nestjs/config';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { DateManagementDto } from './dto/date-managent.dto';
 
 @ApiTags('Bot Sellers')
 @Controller('bot-sellers')
@@ -84,6 +85,20 @@ export class BotSellersController {
   @ApiResponse({ status: 200, description: 'Список всех продавцов ботов' })
   findAll() {
     return this.botSellersService.findAll();
+  }
+
+  @Get('/dates/locked/:sellerId')
+  async getLockedDates(@Param('sellerId') sellerId: number) {
+    return this.botSellersService.getLockedDays(sellerId);
+  }
+
+  @Post('/date')
+  async manageDate(
+    @Body() dateManagementDto: DateManagementDto,
+  ) {
+    console.log('Received dateManagementDto:', dateManagementDto);
+
+    return dateManagementDto.isLocked ? this.botSellersService.lockDay(dateManagementDto.date, dateManagementDto.botSellerId) : this.botSellersService.unblockDay(dateManagementDto.date, dateManagementDto.botSellerId);
   }
 
   @Get('/paged')

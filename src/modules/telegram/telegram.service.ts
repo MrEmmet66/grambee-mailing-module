@@ -472,9 +472,20 @@ export class TelegramService {
   }
 
   buildInlineKeyboard(buttons: any) {
+    // Поддержка формата: [["123", "6767"], ["jghhgj"]]
+    if (Array.isArray(buttons) && buttons.length > 0 && Array.isArray(buttons[0])) {
+      // Преобразуем массив массивов строк в inline_keyboard
+      return {
+        inline_keyboard: buttons.map(row =>
+          row.map(text => ({ text: text, callback_data: text }))
+        )
+      };
+    }
     if (buttons && typeof buttons === 'object' && buttons.inline_keyboard) {
       return buttons;
     }
+    // Логируем, что сообщение будет без клавиатуры
+    console.log('[TelegramService] buildInlineKeyboard: сообщение будет отправлено без клавиатуры', { buttons });
     return undefined;
   }
 
