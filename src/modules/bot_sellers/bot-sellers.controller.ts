@@ -87,6 +87,64 @@ export class BotSellersController {
     return this.botSellersService.findAll();
   }
 
+  @Get('/all')
+  @ApiOperation({ summary: 'Получение всех продавцов ботов с детальной информацией' })
+  @ApiResponse({ 
+    status: 200, 
+    description: 'Список всех продавцов ботов с полной информацией',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          userId: { type: 'number' },
+          botToken: { type: 'string', nullable: true },
+          link: { type: 'string', nullable: true },
+          description: { type: 'string', nullable: true },
+          fixedPrice: { type: 'number', nullable: true },
+          usersData: { type: 'object' },
+          acceptStatus: { 
+            type: 'string', 
+            enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING'] 
+          },
+          isActive: { type: 'boolean' },
+          isChannel: { type: 'boolean' },
+          category: { 
+            type: 'string', 
+            enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'] 
+          },
+          statisticsFilePath: { type: 'string', nullable: true },
+          totalBotAudience: { type: 'number' },
+          botLiveAudience: { type: 'number', nullable: true },
+          botMonthlyActiveUsers: { type: 'number', nullable: true },
+          channelAudience: { type: 'number', nullable: true },
+          channelDaylyActiveUsers: { type: 'number', nullable: true },
+          channelId: { type: 'string', nullable: true },
+          title: { type: 'string', nullable: true },
+          avatarUrl: { type: 'string', nullable: true },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+          user: {
+            type: 'object',
+            properties: {
+              id: { type: 'number' },
+              telegramId: { type: 'string' },
+              username: { type: 'string', nullable: true },
+              firstName: { type: 'string', nullable: true },
+              lastName: { type: 'string', nullable: true },
+              createdAt: { type: 'string', format: 'date-time' },
+              updatedAt: { type: 'string', format: 'date-time' }
+            }
+          }
+        }
+      }
+    }
+  })
+  getAllBotSellers() {
+    return this.botSellersService.getAllBotSellers();
+  }
+
   @Get('/dates/locked/:sellerId')
   async getLockedDates(@Param('sellerId') sellerId: number) {
     return this.botSellersService.getLockedDays(sellerId);

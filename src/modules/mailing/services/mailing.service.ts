@@ -292,6 +292,23 @@ export class MailingService {
         })
     }
 
+    async getAllMailings() {
+        return await this.prismaService.mailing.findMany({
+            include: {
+                user: true,
+                _count: {
+                    select: {
+                        MailingTargetBots: true,
+                        mailingReservations: true
+                    }
+                }
+            },
+            orderBy: {
+                id: 'desc'
+            }
+        });
+    }
+
     async toggleMailingStatus(mailingId: number) {
         const mailing = await this.prismaService.mailing.findUnique({
             where: {
