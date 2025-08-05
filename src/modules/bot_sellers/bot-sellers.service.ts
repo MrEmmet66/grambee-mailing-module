@@ -516,6 +516,51 @@ export class BotSellersService {
     });
   }
 
+  async getAllBotSellers() {
+    const now = new Date();
+    
+    // Получаем всех продавцов ботов с информацией о пользователях
+    const botSellers = await this.prisma.botSeller.findMany({
+      include: {
+        user: true,
+        mailingReservations: {
+          where: {
+            date: { gt: now }
+          }
+        },
+        _count: {
+          select: {
+            mailingReservations: {
+              where: { date: { gt: now } }
+            }
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    // Получаем общий заработок по всем рассылкам каждого продавца
+    const earnings = await this.prisma.mailingReservation.groupBy({
+      by: ['botSellerId'],
+      _sum: {
+        paidAmount: true
+      }
+    });
+
+    // Формируем результат с дополнительной информацией
+    return botSellers.map(seller => {
+      const earning = earnings.find(e => e.botSellerId === seller.id);
+      return {
+        ...seller,
+        totalEarnings: earning?._sum.paidAmount ?? 0,
+        activeMailingsCount: seller._count.mailingReservations,
+        upcomingReservations: seller.mailingReservations
+      };
+    });
+  }
+
   async findOne(id: number) {
     return this.prisma.botSeller.findUnique({
       where: { id },

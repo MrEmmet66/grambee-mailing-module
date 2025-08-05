@@ -12,7 +12,6 @@ import { diskStorage } from 'multer';
 import { extname } from 'path';
 import { MailingScheduleService } from './mailingSchedue.service';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiParam } from '@nestjs/swagger';
-import { MailingStatus } from '@prisma/client';
 import { log } from 'console';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -435,6 +434,60 @@ export class MailingController {
     @ApiResponse({ status: 404, description: 'Пользователь не найден.' })
     async getUserMailings(@Param('userId') userId: string) {
         return await this.mailingService.getUserMailings(parseInt(userId, 10));
+    }
+
+    @Get('/all')
+    @ApiOperation({ summary: 'Получить все рассылки' })
+    @ApiResponse({
+        status: 200,
+        description: 'Список всех рассылок с детальной информацией.',
+        schema: {
+            type: 'array',
+            items: {
+                type: 'object',
+                properties: {
+                    id: { type: 'number', example: 1 },
+                    userId: { type: 'number', example: 1 },
+                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ', nullable: true },
+                    channelId: { type: 'string', example: '-1001234567890', nullable: true },
+                    isChannel: { type: 'boolean', example: false },
+                    botLink: { type: 'string', example: 'https://t.me/example_bot', nullable: true },
+                    status: { 
+                        type: 'string', 
+                        enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'], 
+                        example: 'PENDING' 
+                    },
+                    isActive: { type: 'boolean', example: false },
+                    postContent: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
+                    postButtons: { type: 'object', example: '[{"text":"Перейти","url":"https://example.com"}]' },
+                    postMedia: { type: 'string', example: 'uploads/media-123456789.jpg', nullable: true },
+                    postMediaType: { type: 'string', example: 'photo', nullable: true },
+                    createdAt: { type: 'string', format: 'date-time' },
+                    updatedAt: { type: 'string', format: 'date-time' },
+                    user: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'number' },
+                            telegramId: { type: 'string' },
+                            username: { type: 'string', nullable: true },
+                            firstName: { type: 'string', nullable: true },
+                            lastName: { type: 'string', nullable: true }
+                        }
+                    },
+                    _count: {
+                        type: 'object',
+                        properties: {
+                            MailingTargetBots: { type: 'number' },
+                            mailingReservations: { type: 'number' }
+                        }
+                    }
+                }
+            }
+        }
+    })
+    @ApiResponse({ status: 500, description: 'Внутренняя ошибка сервера.' })
+    async getAllMailings() {
+        return await this.mailingService.getAllMailings();
     }
 
     @Get('/date')
