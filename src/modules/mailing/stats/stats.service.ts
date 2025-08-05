@@ -291,15 +291,15 @@ export class StatsService {
         let workerMetrics = '';
         try {
             // Используем mailing.id как mailing_id для запроса метрик
-            const mailingId = reservation?.mailing?.id;
+            const mailingId = reservation?.id;
             if (mailingId) {
                 // Конвертируем number в string для Go API
                 const response = await fetch(`${goWorkerUrl}/api/v1/mailings/${mailingId.toString()}/metrics`);
                 if (response.ok) {
                     const metrics = await response.json();
                     workerMetrics = `
-├ Флудов: <code>${metrics.flood_count || 0}</code>
-├ Общее время флудов: <code>${metrics.total_flood_time || 0} сек </code>`;
+├ Флудов: <code>${metrics.flood_wait_count || 0}</code>
+├ Общее время флудов: <code>${metrics.total_flood_wait_sec || 0} сек </code>`;
                 } else {
                     workerMetrics = ``;
                 }
