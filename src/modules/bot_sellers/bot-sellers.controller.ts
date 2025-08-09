@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile, UseGuards, BadRequestException } from '@nestjs/common';
 import { BotSellersService } from './bot-sellers.service';
 import { CreateBotSellerDto, CreateBotSellerFormData, UpdateBotSellerDto } from './dto';
 import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse, ApiConsumes } from '@nestjs/swagger';
@@ -53,6 +53,9 @@ export class BotSellersController {
     // Handle the uploaded file if it exists
     if (statisticsFile) {
       console.log('Controller received statisticsFile:', statisticsFile.originalname);
+    }
+    if (createBotSellerDto.isChannel === 'false' && !statisticsFile) {
+        throw new BadRequestException('Для каналов ботов требуется загрузить файл статистики пользователей.');
     }
     console.log('Controller received createBotSellerDto:', createBotSellerDto);
     const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
