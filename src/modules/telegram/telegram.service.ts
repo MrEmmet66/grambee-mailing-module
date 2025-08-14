@@ -394,6 +394,7 @@ export class TelegramService {
         case 'video': endpoint = 'sendVideo'; mediaField = 'video'; break;
         case 'document': endpoint = 'sendDocument'; mediaField = 'document'; break;
         case 'audio': endpoint = 'sendAudio'; mediaField = 'audio'; break;
+        case 'animation': endpoint = 'sendAnimation'; mediaField = 'animation'; break;
         default: endpoint = 'sendPhoto'; mediaField = 'photo'; break;
       }
     }

@@ -67,6 +67,9 @@ func (c *Client) SendMediaMessage(chatID string, messageData models.MessageData,
 	case "video":
 		endpoint = "sendVideo"
 		mediaField = "video"
+	case "animation":
+		endpoint = "sendAnimation"
+		mediaField = "animation"
 	case "audio":
 		endpoint = "sendAudio"
 		mediaField = "audio"
