@@ -173,6 +173,52 @@ export class ApplicationsService {
         }
     }
 
+    getCategoryEmoji(category: string): string {
+        let categoryEmoji = '';
+        switch (category) {
+            case 'GAMBLING':
+                categoryEmoji = '🎰';
+                break;
+            case 'OTHER':
+                categoryEmoji = '📦';
+                break;
+            case 'DATING':
+                categoryEmoji = '💕';
+                break;
+            case 'GAMES':
+                categoryEmoji = '🎮';
+                break;
+            case 'CRYPTO':
+                categoryEmoji = '💰';
+                break;
+            case 'FUN':
+                categoryEmoji = '🎭';
+                break;
+            case 'TECH':
+                categoryEmoji = '🤖';
+                break;
+            case 'UTILITY':
+                categoryEmoji = '🔧';
+                break;
+        }
+
+        return categoryEmoji;
+    }
+
+    getCategoryName(category: string): string {
+        const categories = {
+            'GAMBLING': 'Гэмблинг',
+            'OTHER': 'Другое',
+            'DATING': 'Знакомства',
+            'GAMES': 'Игры',
+            'CRYPTO': 'Крипто',
+            'FUN': 'Развлечения',
+            'TECH': 'Технологии/нейросети',
+            'UTILITY': 'Утилиты/Продуктивность'
+        };
+        return categories[category] || category;
+    };
+
     async sendBotSellerApplication(botSeller: BotSeller) {
         const chatId = this.configService.get<string>('ADMIN_CHAT_ID') || "-1002677251791";
         const applicationsTopicId = this.configService.get<number>('BOT_APPLICATIONS_TOPIC_ID') || 9;
@@ -338,20 +384,31 @@ export class ApplicationsService {
             // Update the mailing status in the database (заменено на processorService)
             await this.processorService.updateMailingStatus(Number(mailingId), 'APPROVED');
 
-            await ctx.answerCbQuery(`✅ Заявка на рассылку #${mailingId} подтверждена`);
+            const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
+            const mailingOwner = await this.mailingService.getMailingOwner(Number(mailingId));
+            const mailing = await this.mailingService.getMailingById(Number(mailingId));
 
             const message =
                 `<b>✅ ЗАЯВКА НА РАССЫЛКУ ПОДТВЕРЖДЕНА</b>\n\n` +
+                `<b>👤 Пользователь:</b> @${mailingOwner.username}\n` +
+                `<b>🔗 Ссылка:</b> ${mailing.link}\n` +
+                `<b>📅 Дата создания:</b> ${new Date().toLocaleString('ru-RU')}\n` +
+                `<b>📝 Контент:</b>\n<pre>${mailing.postContent}</pre>\n\n` +
+                (mailing.postMedia ?
+                    `<b>🖼 Медиа:</b> ${mailing.postMedia}\n` +
+                    `<b>📂 Тип медиа:</b> ${mailing.postMediaType || 'Не указан'}\n\n` :
+                    ''
+                ) +
+                `<b>🔘 Кнопки:</b> ${mailing.postButtons}` +
                 `<b>🆔 ID заявки:</b> #${mailingId}\n` +
-                `<b>🕒 Время обработки:</b> ${new Date().toLocaleString('ru-RU')}\n\n`
+                `<b>🕒 Время обработки:</b> ${new Date().toLocaleString('ru-RU')}\n\n` +
+                `<b>Одобрил:</b> @${ctx.from?.first_name}(${ctx.from?.id})`
 
             await ctx.editMessageText(message, {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
 
-            const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
-            const mailing = await this.mailingService.getMailingById(Number(mailingId));
             const notificationMessage =
                 `— Статус модерации:\n` +
                 `Рассылка ${mailing.link}\n\n` +
@@ -360,6 +417,8 @@ export class ApplicationsService {
             await this.sendNotification(mailingOwnerTelegramId, notificationMessage);
 
             await this.telegramService.notifyUser(mailingOwnerTelegramId, notificationMessage);
+
+            await ctx.answerCbQuery(`✅ Заявка на рассылку #${mailingId} подтверждена`);
 
             return true;
         } catch (error) {
@@ -383,19 +442,31 @@ export class ApplicationsService {
 
             await ctx.answerCbQuery(`❌ Заявка на рассылку #${mailingId} отклонена`);
 
+            const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
+
+            const mailingOwner = await this.mailingService.getMailingOwner(Number(mailingId));
+            const mailing = await this.mailingService.getMailingById(Number(mailingId));
+
             const message =
                 `<b>❌ ЗАЯВКА НА РАССЫЛКУ ОТКЛОНЕНА</b>\n\n` +
+                `<b>👤 Пользователь:</b> @${mailingOwner.username}\n` +
+                `<b>🔗 Ссылка:</b> ${mailing.link}\n` +
+                `<b>📅 Дата создания:</b> ${new Date().toLocaleString('ru-RU')}\n` +
+                `<b>📝 Контент:</b>\n<pre>${mailing.postContent}</pre>\n\n` +
+                (mailing.postMedia ?
+                    `<b>🖼 Медиа:</b> ${mailing.postMedia}\n` +
+                    `<b>📂 Тип медиа:</b> ${mailing.postMediaType || 'Не указан'}\n\n` :
+                    ''
+                ) +
+                `<b>🔘 Кнопки:</b> ${mailing.postButtons}` +
                 `<b>🆔 ID заявки:</b> #${mailingId}\n` +
                 `<b>🕒 Время обработки:</b> ${new Date().toLocaleString('ru-RU')}\n\n` +
-                `<i>Рассылка была отклонена. Пользователь может отправить новую заявку.</i>`;
+                `<b>Отказал:</b> @${ctx.from?.first_name}(${ctx.from?.id})`
 
             await ctx.editMessageText(message, {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
-            const mailingOwnerTelegramId = await this.mailingService.getMailingOwnerTelegramId(Number(mailingId));
-
-            const mailing = await this.mailingService.getMailingById(Number(mailingId));
             const notificationMessage =
                 `— Статус модерации:\n` +
                 `Рассылка ${mailing.link}\n\n` +
@@ -486,24 +557,42 @@ export class ApplicationsService {
             // Затем обновим сообщение в телеграме
             await ctx.answerCbQuery(`✅ Заявка на бота #${botSellerId} подтверждена`);
 
+            const botSeller = await this.botSellersService.findOne(Number(botSellerId));
+            const botSellerOwnerTelegramId = await this.botSellersService.getBotSellerOwnerTelegramId(Number(botSellerId));
+            const botSellerOwner = await this.botSellersService.getBotSellerOwner(Number(botSellerId));
+
+            if (!botSeller || !botSellerOwner) {
+                console.error(`Bot seller owner with ID ${botSellerOwnerTelegramId} not found`);
+                await ctx.answerCbQuery('Владелец бота не найден в базе данных');
+                return false;
+            }
+
             const message =
                 `<b>✅ ЗАЯВКА ПОДТВЕРЖДЕНА</b>\n\n` +
                 `<b>🆔 ID заявки:</b> #${botSellerId}\n` +
-                `<b>🕒 Время обработки:</b> ${new Date().toLocaleString('ru-RU')}\n\n` +
-                `<i>Бот был добавлен в систему и теперь активен.</i>`;
+                `<b>👤 Пользователь:</b> @${botSellerOwner.username}\n` +
+                `<b>📅 Дата создания:</b> ${new Date(botSeller.createdAt).toLocaleString('ru-RU')}\n\n` +
+                `<b>📝 Информация о боте:</b>\n` +
+                `• <b>Описание:</b> ${botSeller.description || '<i>Не указано</i>'}\n` +
+                `• <b>Категория:</b> ${this.getCategoryEmoji(botSeller.category)} ${this.getCategoryName(botSeller.category)}\n\n` +
+                `• <b>Цена:</b>${botSeller.fixedPrice}\n` +
+                `<b>📊 Статистика:</b>\n` +
+                `• <b>Активных пользователей:</b> ${botSeller.botLiveAudience || 0}\n` +
+                `• <b>Активных в месяц:</b> ${botSeller.botMonthlyActiveUsers || 0}\n` +
+                `• <b>Аудитория канала:</b> ${botSeller.channelAudience || 0}\n` +
+                `• <b>Одобрил:</b> ${ctx.from?.first_name}(${ctx.from?.id})
+            `;
 
             await ctx.editMessageText(message, {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
 
-            const botSeller = await this.botSellersService.findOne(Number(botSellerId));
             if (!botSeller) {
                 console.error(`Bot seller with ID ${botSellerId} not found`);
                 await ctx.answerCbQuery('Бот не найден в базе данных');
                 return false;
             }
-            const botSellerOwnerTelegramId = await this.botSellersService.getBotSellerOwnerTelegramId(Number(botSellerId));
             const notificationMessage =
                 `— Статус модерации:\n` +
                 `${botSeller?.isChannel ? 'Канал' : 'Бот'} ${botSeller.link}\n\n` +
@@ -547,26 +636,39 @@ export class ApplicationsService {
             }
 
             // Затем обновим сообщение в телеграме
-            await ctx.answerCbQuery(`❌ Заявка на бота #${botSellerId} отклонена`);
+            
+
+            const botSeller = await this.botSellersService.findOne(Number(botSellerId));
+            const botSellerOwnerTelegramId = await this.botSellersService.getBotSellerOwnerTelegramId(Number(botSellerId));
+            const botSellerOwner = await this.botSellersService.getBotSellerOwner(Number(botSellerId));
+
+            if (!botSellerOwner || !botSeller) {
+                console.error(`Bot seller owner with ID ${botSellerId} not found`);
+                await ctx.answerCbQuery('Владелец бота не найден в базе данных');
+                return false;
+            }
 
             const message =
                 `<b>❌ ЗАЯВКА ОТКЛОНЕНА</b>\n\n` +
                 `<b>🆔 ID заявки:</b> #${botSellerId}\n` +
-                `<b>🕒 Время обработки:</b> ${new Date().toLocaleString('ru-RU')}\n\n` +
-                `<i>Бот был отклонен. Пользователь может отправить новую заявку.</i>`;
+                `<b>👤 Пользователь:</b> @${botSellerOwner.username}\n` +
+                `<b>📅 Дата создания:</b> ${new Date(botSeller.createdAt).toLocaleString('ru-RU')}\n\n` +
+                `<b>📝 Информация о боте:</b>\n` +
+                `• <b>Описание:</b> ${botSeller.description || '<i>Не указано</i>'}\n` +
+                `• <b>Категория:</b> ${this.getCategoryEmoji(botSeller.category)} ${this.getCategoryName(botSeller.category)}\n\n` +
+                `• <b>Цена:</b>${botSeller.fixedPrice}\n` +
+                `<b>📊 Статистика:</b>\n` +
+                `• <b>Активных пользователей:</b> ${botSeller.botLiveAudience || 0}\n` +
+                `• <b>Активных в месяц:</b> ${botSeller.botMonthlyActiveUsers || 0}\n` +
+                `• <b>Аудитория канала:</b> ${botSeller.channelAudience || 0}\n` +
+                `• <b>Одобрил:</b> ${ctx.from?.first_name}(${ctx.from?.id})
+            `;
 
             await ctx.editMessageText(message, {
                 reply_markup: undefined,
                 parse_mode: 'HTML'
             });
 
-            const botSeller = await this.botSellersService.findOne(Number(botSellerId));
-            if (!botSeller) {
-                console.error(`Bot seller with ID ${botSellerId} not found`);
-                await ctx.answerCbQuery('Бот не найден в базе данных');
-                return false;
-            }
-            const botSellerOwnerTelegramId = await this.botSellersService.getBotSellerOwnerTelegramId(Number(botSellerId));
             const notificationMessage =
                 `— Статус модерации:\n` +
                 `${botSeller?.isChannel ? 'Канал' : 'Бот'} ${botSeller.link}\n\n` +
@@ -575,6 +677,8 @@ export class ApplicationsService {
             await this.sendNotification(botSellerOwnerTelegramId, notificationMessage);
 
             await this.telegramService.notifyUser(botSellerOwnerTelegramId, notificationMessage);
+
+            await ctx.answerCbQuery(`❌ Заявка на бота #${botSellerId} отклонена`);
 
             return true;
         } catch (error) {
@@ -774,7 +878,7 @@ export class ApplicationsService {
 
             // Отправляем обновленное сообщение заявки
             await this.sendBotSellerApplication(botSeller);
-            
+
 
             // Удаляем текущее сообщение с меню категорий
             await ctx.deleteMessage();
@@ -1001,6 +1105,7 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
 🕒 **Время обработки:** ${new Date().toLocaleString('ru-RU')}
 
 📱 **Уведомления отправлены:** заказчику и исполнителю
+Одобрил: ${ctx.from?.first_name}(${ctx.from?.id})
             `;
 
             await ctx.editMessageText(successMessage, {
@@ -1042,6 +1147,7 @@ ${result.additionalCharge > 0 ? `💳 **Доплачено:** ${result.additiona
 
 💰 **Деньги не списаны** и остаются в холде до решения администрации.
 📱 **Уведомления отправлены:** заказчику и исполнителю
+Заморозил: ${ctx.from?.first_name}(${ctx.from?.id})
             `;
 
             await ctx.editMessageText(freezeMessage, {
