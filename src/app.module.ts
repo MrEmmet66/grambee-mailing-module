@@ -1,3 +1,4 @@
+import { CommissionsModule } from './modules/commissions/commissions.module';
 import { HealthController } from './modules/health.controller';
 import { MailingCheckoutService } from './modules/mailing/services/mailingcheckout.service';
 import { PrismaModule } from 'prisma/prisma.module';
@@ -17,6 +18,7 @@ import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
+    CommissionsModule,
     ScheduleModule.forRoot(),
     ServeStaticModule.forRoot({
       rootPath: `${process.cwd()}/uploads`,

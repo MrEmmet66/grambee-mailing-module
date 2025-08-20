@@ -3,6 +3,7 @@
 # an example folder and use the folder as the project root (it also contains a
 # projects-specific .gitignore).
 
+.github/
 node_modules/
 generated/prisma/
 yarn-error.log/

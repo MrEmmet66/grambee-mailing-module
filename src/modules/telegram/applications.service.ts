@@ -316,6 +316,7 @@ export class ApplicationsService {
             `<b>👤 Пользователь:</b> @${botSellerOwner.username}\n` +
             `<b>📅 Дата создания:</b> ${new Date(botSeller.createdAt).toLocaleString('ru-RU')}\n\n` +
             `<b>📝 Информация о боте:</b>\n` +
+            `• <b>🔗Ссылка:</b> ${botSeller.link || '<i>Не указано</i>'}\n` +
             `• <b>Описание:</b> ${botSeller.description || '<i>Не указано</i>'}\n` +
             `• <b>Категория:</b> ${categoryEmoji} ${getCategoryName(botSeller.category)}\n\n` +
             `• <b>Цена:</b> ${statusEmoji} ${botSeller.fixedPrice}\n` +
