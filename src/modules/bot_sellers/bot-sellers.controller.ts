@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile, UseGuards, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, Query, UseInterceptors, UploadedFile, UseGuards, BadRequestException, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { BotSellersService } from './bot-sellers.service';
 import { CreateBotSellerDto, CreateBotSellerFormData, UpdateBotSellerDto } from './dto';
 import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse, ApiConsumes } from '@nestjs/swagger';
@@ -8,14 +8,21 @@ import { extname } from 'path';
 import { ConfigService } from '@nestjs/config';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { DateManagementDto } from './dto/date-managent.dto';
+import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @ApiTags('Bot Sellers')
 @Controller('bot-sellers')
 // @UseGuards(JwtAuthGuard)
 export class BotSellersController {
+
+  private isProd: boolean;
+
   constructor(private readonly botSellersService: BotSellersService,
-              private readonly configService: ConfigService
-  ) {}
+    private readonly configService: ConfigService
+  ) {
+    const env = this.configService.get<string>('ENVIRONMENT') ?? process.env.ENVIRONMENT;
+    this.isProd = env === 'production' || env === 'prod';
+  }
 
   @Post()
   @ApiOperation({ summary: 'Создание нового продавца ботов' })
@@ -28,7 +35,7 @@ export class BotSellersController {
         destination: './uploads/bot_users',
         filename: (req, file, callback) => {
           console.log('FileInterceptor received file:', file.originalname);
-          
+
           const botToken = req.body.botToken;
           const sanitizedToken = botToken ? botToken.replace(/[^a-zA-Z0-9]/g, '_') : '';
           const fileName = `${sanitizedToken}_statistics${extname(file.originalname)}`;
@@ -55,12 +62,12 @@ export class BotSellersController {
       console.log('Controller received statisticsFile:', statisticsFile.originalname);
     }
     if (createBotSellerDto.isChannel === 'false' && !statisticsFile) {
-        throw new BadRequestException('Для каналов ботов требуется загрузить файл статистики пользователей.');
+      throw new BadRequestException('Для каналов ботов требуется загрузить файл статистики пользователей.');
     }
     console.log('Controller received createBotSellerDto:', createBotSellerDto);
     const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
-    
-    if(createBotSellerDto.isChannel === 'true') {
+
+    if (createBotSellerDto.isChannel === 'true') {
       createBotSellerDto.botToken = mainBotToken;
     }
 
@@ -76,8 +83,8 @@ export class BotSellersController {
       statisticsFile: statisticsFile ? statisticsFile : undefined,
     }
     console.log('statisticsFile:', statisticsFile);
-    
-    
+
+
     console.log('Controller received isChannel:', createBotSellerDto.isChannel);
 
     return this.botSellersService.create(botSellerData, statisticsFile);
@@ -92,8 +99,8 @@ export class BotSellersController {
 
   @Get('/all')
   @ApiOperation({ summary: 'Получение всех продавцов ботов с детальной информацией' })
-  @ApiResponse({ 
-    status: 200, 
+  @ApiResponse({
+    status: 200,
     description: 'Список всех продавцов ботов с полной информацией',
     schema: {
       type: 'array',
@@ -107,15 +114,15 @@ export class BotSellersController {
           description: { type: 'string', nullable: true },
           fixedPrice: { type: 'number', nullable: true },
           usersData: { type: 'object' },
-          acceptStatus: { 
-            type: 'string', 
-            enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING'] 
+          acceptStatus: {
+            type: 'string',
+            enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING']
           },
           isActive: { type: 'boolean' },
           isChannel: { type: 'boolean' },
-          category: { 
-            type: 'string', 
-            enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'] 
+          category: {
+            type: 'string',
+            enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY']
           },
           statisticsFilePath: { type: 'string', nullable: true },
           totalBotAudience: { type: 'number' },
@@ -156,8 +163,16 @@ export class BotSellersController {
   @Post('/date')
   async manageDate(
     @Body() dateManagementDto: DateManagementDto,
+    @CurrentUser() user?: AuthUser
   ) {
-    console.log('Received dateManagementDto:', dateManagementDto);
+    if (this.isProd) {
+      if (!user) {
+        throw new UnauthorizedException('Требуется авторизация.');
+      }
+      if (!(await this.botSellersService.isUserOwningBot(user.telegramId, dateManagementDto.botSellerId))) {
+        throw new ForbiddenException('У вас нет прав на изменение этого бота.');
+      }
+    }
 
     return dateManagementDto.isLocked ? this.botSellersService.lockDay(dateManagementDto.date, dateManagementDto.botSellerId) : this.botSellersService.unblockDay(dateManagementDto.date, dateManagementDto.botSellerId);
   }
@@ -212,15 +227,24 @@ export class BotSellersController {
   @ApiParam({ name: 'id', description: 'ID продавца бота' })
   @ApiBody({ type: UpdateBotSellerDto })
   @ApiResponse({ status: 200, description: 'Данные продавца бота обновлены' })
-  update(@Param('id') id: string, @Body() updateBotSellerDto: UpdateBotSellerDto) {
-    
+  async update(@Param('id') id: string, @Body() updateBotSellerDto: UpdateBotSellerDto, @CurrentUser() user?: AuthUser) {
+
+    if (this.isProd) {
+      if (!user) {
+        throw new UnauthorizedException('Требуется авторизация.');
+      }
+      if (!(await this.botSellersService.isUserOwningBot(user.telegramId, +id))) {
+        throw new ForbiddenException('У вас нет прав на изменение этого бота.');
+      }
+    }
+
     return this.botSellersService.update(+id, updateBotSellerDto);
   }
 
   @Patch(':id/status')
   @ApiOperation({ summary: 'Обновление статуса продавца бота' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })
-  @ApiBody({ 
+  @ApiBody({
     schema: {
       type: 'object',
       properties: {
@@ -233,17 +257,27 @@ export class BotSellersController {
     }
   })
   @ApiResponse({ status: 200, description: 'Статус продавца бота обновлен' })
-  updateStatus(
-    @Param('id') id: string, 
-    @Body('status') status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WAITING'
+  async updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WAITING',
+    @CurrentUser() user?: AuthUser
   ) {
+    if (this.isProd) {
+      if (!user) {
+        throw new UnauthorizedException('Требуется авторизация.');
+      }
+      if (!(await this.botSellersService.isUserOwningBot(user.telegramId, +id))) {
+        throw new ForbiddenException('У вас нет прав на изменение этого бота.');
+      }
+    }
+
     return this.botSellersService.updateStatus(+id, status);
   }
 
   @Patch(':id/statistics')
   @ApiOperation({ summary: 'Обновление статистики продавца бота' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })
-  @ApiBody({ 
+  @ApiBody({
     schema: {
       type: 'object',
       properties: {
@@ -267,46 +301,45 @@ export class BotSellersController {
     }
   })
   @ApiResponse({ status: 200, description: 'Статистика продавца бота обновлена' })
-  updateStatistics(
+  async updateStatistics(
     @Param('id') id: string,
     @Body() statistics: {
       botLiveAudience?: number;
       botMonthlyActiveUsers?: number;
       channelAudience?: number;
       channelDaylyActiveUsers?: number;
-    }
+    },
+    @CurrentUser() user?: AuthUser
   ) {
+    if (this.isProd) {
+      if (!user) {
+        throw new UnauthorizedException('Требуется авторизация.');
+      }
+      if (!(await this.botSellersService.isUserOwningBot(user.telegramId, +id))) {
+        throw new ForbiddenException('У вас нет прав на изменение этого бота.');
+      }
+    }
+
     return this.botSellersService.updateStatistics(+id, statistics);
   }
 
-  @Patch(':id/category')
-  @ApiOperation({ summary: 'Обновление категории бота' })
-  @ApiParam({ name: 'id', description: 'ID продавца бота' })
-  @ApiBody({ 
-    schema: {
-      type: 'object',
-      properties: {
-        category: {
-          type: 'string',
-          enum: ['GAMBLING', 'OTHER', 'DATING', 'GAMES', 'CRYPTO', 'FUN', 'TECH', 'UTILITY'],
-          description: 'Новая категория бота'
-        }
-      }
-    }
-  })
-  @ApiResponse({ status: 200, description: 'Категория бота обновлена' })
-  updateCategory(
-    @Param('id') id: string, 
-    @Body('category') category: 'GAMBLING' | 'OTHER' | 'DATING' | 'GAMES' | 'CRYPTO' | 'FUN' | 'TECH' | 'UTILITY'
-  ) {
-    return this.botSellersService.updateCategory(+id, category);
-  }
 
   @Delete(':id')
   @ApiOperation({ summary: 'Удаление продавца бота' })
   @ApiParam({ name: 'id', description: 'ID продавца бота' })
   @ApiResponse({ status: 200, description: 'Продавец бота успешно удален' })
-  remove(@Param('id') id: string) {
+  async remove(@Param('id') id: string,
+   @CurrentUser() user?: AuthUser
+  ) {
+    if (this.isProd) {
+      if (!user) {
+        throw new UnauthorizedException('Требуется авторизация.');
+      }
+      if (!(await this.botSellersService.isUserOwningBot(user.telegramId, +id))) {
+        throw new ForbiddenException('У вас нет прав на изменение этого бота.');
+      }
+    }
+
     return this.botSellersService.remove(+id);
   }
 
@@ -351,10 +384,20 @@ export class BotSellersController {
       }
     }),
   )
-  uploadStatistics(
+  async uploadStatistics(
     @Param('id') id: string,
     @UploadedFile() statisticsFile: Express.Multer.File,
+    @CurrentUser() user?: AuthUser
   ) {
+    if (this.isProd) {
+      if (!user) {
+        throw new UnauthorizedException('Требуется авторизация.');
+      }
+      if (!(await this.botSellersService.isUserOwningBot(user.telegramId, +id))) {
+        throw new ForbiddenException('У вас нет прав на изменение этого бота.');
+      }
+    }
+
     return this.botSellersService.uploadStatistics(+id, statisticsFile);
   }
 }

@@ -6,9 +6,6 @@ import { UserMailingStatistics, BotStatistics, ChannelStatistics, SellerStatisti
 export class StatsController {
     constructor(private readonly statsService: StatsService) {}
 
-    // This controller will handle all the statistics-related endpoints
-    // For example, you can add methods to get statistics about mailings, reservations, etc.
-
     @Get('user/:userId/mailings')
     async getUserMailingStatistics(@Param('userId', ParseIntPipe) userId: number): Promise<UserMailingStatistics> {
         return await this.statsService.getUserMailingStatistics(userId);

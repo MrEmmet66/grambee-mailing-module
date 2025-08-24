@@ -592,6 +592,17 @@ export class BotSellersService {
     });
   }
 
+  async isUserOwningBot(userId: string, botSellerId: number): Promise<boolean> {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+      include: {
+        user: true
+      }
+    });
+
+    return botSeller?.user.telegramId === userId;
+  }
+
   async remove(id: number) {
     const futureReservations = await this.prisma.mailingReservation.findMany({
       where: {

@@ -6,3 +6,5 @@ export const CurrentUser = createParamDecorator(
     return request.user;
   },
 ); 
+
+export type AuthUser = { id: string; telegramId: string; username?: string };

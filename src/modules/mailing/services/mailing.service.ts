@@ -46,6 +46,19 @@ export class MailingService {
         return mailing.user.telegramId;
     }
 
+    async getMailingByReservationId(reservationId: number) {
+        const reservation = await this.prismaService.mailingReservation.findUnique({
+            where: { id: reservationId },
+            include: { mailing: true }
+        });
+
+        if (!reservation) {
+            throw new NotFoundException(`Reservation with ID ${reservationId} not found`);
+        }
+
+        return reservation.mailing;
+    }
+
     async getMailingTargetBots(mailingId: number): Promise<MailingTargetBots[]> {
         const targetBots = await this.prismaService.mailingTargetBots.findMany({
             where: { mailingId: mailingId },
@@ -70,6 +83,14 @@ export class MailingService {
             throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
         }
         return mailing.user;
+    }
+
+    async isUserOwningMailing(userTelegramId: string, mailingId: number): Promise<boolean> {
+        const mailing = await this.prismaService.mailing.findUnique({
+            where: { id: mailingId },
+            include: { user: true }
+        });
+        return mailing?.user.telegramId === userTelegramId;
     }
 
     async deleteMailing(mailingId: number) {
@@ -118,6 +139,12 @@ export class MailingService {
             }
         });
 
+    }
+
+    async getMailingByTargetBot(targetBotId: number) {
+        return await this.prismaService.mailing.findFirst({
+            where: { MailingTargetBots: { some: { id: targetBotId } } }
+        });
     }
 
     async updateMailingTargetBotContent(targetBotId: number, updateData: UpdateTargetBotContentFormData) {

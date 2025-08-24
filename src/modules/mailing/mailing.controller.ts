@@ -2,7 +2,7 @@
 https://docs.nestjs.com/controllers#controllers
 */
 
-import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete, UseGuards } from '@nestjs/common';
+import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete, UseGuards, UnauthorizedException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { MailingService } from './services/mailing.service';
 import { ReservationService } from './services/reservation.service';
 import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateMailingContentDto, UpdateTargetBotContentFormData } from './dto/createMailing.dto';
@@ -14,16 +14,23 @@ import { MailingScheduleService } from './mailingSchedue.service';
 import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiParam } from '@nestjs/swagger';
 import { log } from 'console';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ConfigService } from '@nestjs/config';
+import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @ApiTags('mailings')
 @Controller('mailings')
 // @UseGuards(JwtAuthGuard)
 export class MailingController {
-        constructor(
-            private readonly mailingService: MailingService,
-            private readonly mailingScheduleService: MailingScheduleService,
-            private readonly reservationService: ReservationService
-        ) { }
+    private isProd: boolean;
+    constructor(
+        private readonly mailingService: MailingService,
+        private readonly mailingScheduleService: MailingScheduleService,
+        private readonly reservationService: ReservationService,
+        private readonly configService: ConfigService
+    ) {
+        const env = this.configService.get<string>('ENVIRONMENT') ?? process.env.ENVIRONMENT;
+        this.isProd = env === 'production' || env === 'prod';
+    }
 
     @Post()
     @ApiOperation({ summary: 'Создать новую рассылку' })
@@ -129,7 +136,15 @@ export class MailingController {
     }
 
     @Post('reserve')
-    async reserveMailingDay(@Body() dto: CreateMailingReservationDto) {
+    async reserveMailingDay(@Body() dto: CreateMailingReservationDto, @CurrentUser() user?: AuthUser) {
+        if (this.isProd) {
+            if (!user) {
+                throw new UnauthorizedException('Требуется авторизация.');
+            }
+            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, dto.mailingId))) {
+                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
+            }
+        }
 
         return await this.reservationService.reserveMailingDay(dto);
     }
@@ -166,9 +181,19 @@ export class MailingController {
                     errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
                     fileIsRequired: false, // File is optional for updates
                 }),
-        ) file: Express.Multer.File
+        ) file: Express.Multer.File,
+        @CurrentUser() user?: AuthUser
     ) {
         const mailingId = parseInt(id, 10);
+
+        if (this.isProd) {
+            if (!user) {
+                throw new UnauthorizedException('Требуется авторизация.');
+            }
+            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailingId))) {
+                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
+            }
+        }
 
         if (!updateData.content) {
             throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
@@ -238,9 +263,30 @@ export class MailingController {
                     errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
                     fileIsRequired: false, // File is optional for updates
                 }),
-        ) file: Express.Multer.File
+        ) file: Express.Multer.File,
+        @CurrentUser() user?: AuthUser
     ) {
+
+
         const targetBotId = parseInt(id, 10);
+
+        const mailing = await this.mailingService.getMailingByTargetBot(targetBotId);
+
+        if (!mailing) {
+            throw new NotFoundException(`Рассылка с ID ${targetBotId} не найдена`);
+        }
+
+        if (this.isProd) {
+            if (!user) {
+                throw new UnauthorizedException('Требуется авторизация.');
+            }
+            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailing?.id))) {
+                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
+            }
+        }
+
+
+
 
         if (!updateData.content) {
             throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
@@ -280,49 +326,36 @@ export class MailingController {
     }
 
 
-    @Patch(':id/toggle')
-    @ApiOperation({ summary: 'Включить/выключить рассылку' })
-    @ApiParam({ name: 'id', description: 'ID рассылки' })
-    @ApiResponse({ status: 200, description: 'Статус рассылки изменен.' })
-    @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
-    async toggleMailingStatus(@Param('id') id: string) {
-        return await this.mailingService.toggleMailingStatus(parseInt(id, 10));
-    } @Delete('reservations/:id')
+    @Delete('reservations/:id')
     @ApiOperation({
         summary: 'Отменить резервирование рассылки по ID',
         description: 'Отменяет резервирование не менее чем за 48 часов до даты. Возвращает покупателю 70%, продавцу 25%, комиссия 5%.'
     })
     @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
-    @ApiResponse({
-        status: 200,
-        description: 'Резервирование отменено с частичным возвратом средств.',
-        schema: {
-            type: 'object',
-            properties: {
-                reservation: { type: 'object', description: 'Удаленное резервирование' },
-                refundDetails: {
-                    type: 'object',
-                    properties: {
-                        totalHeldAmount: { type: 'number', description: 'Общая удержанная сумма' },
-                        buyerRefundAmount: { type: 'number', description: 'Сумма возврата покупателю (70%)' },
-                        sellerCompensationAmount: { type: 'number', description: 'Компенсация продавцу (25%)' },
-                        cancellationFee: { type: 'number', description: 'Комиссия за отмену (5%)' },
-                        buyerTelegramId: { type: 'string', description: 'Telegram ID покупателя' },
-                        sellerTelegramId: { type: 'string', description: 'Telegram ID продавца' }
-                    }
-                }
-            }
-        }
-    })
     @ApiResponse({ status: 404, description: 'Резервирование не найдено.' })
     @ApiResponse({ status: 409, description: 'Резервирование нельзя отменить (менее 48 часов до даты или уже обработано).' })
     @ApiResponse({ status: 412, description: 'Ошибка обработки возврата средств.' })
     @ApiResponse({ status: 200, description: 'Резервирование рассылки успешно удалено.' })
     @ApiResponse({ status: 404, description: 'Резервирование рассылки не найдено.' })
-    async deleteMailingReservation(@Param('id') id: string) {
+    async deleteMailingReservation(@Param('id') id: string, @CurrentUser() user?: AuthUser) {
         const reservationId = parseInt(id, 10);
         if (isNaN(reservationId)) {
             throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
+        }
+
+        const mailing = await this.mailingService.getMailingByReservationId(reservationId);
+
+        if (this.isProd) {
+            if (!user) {
+                throw new UnauthorizedException('Требуется авторизация.');
+            }
+            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailing.id))) {
+                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
+            }
+        }
+
+        if (!mailing) {
+            throw new NotFoundException(`Mailing with reservation ID ${reservationId} not found`);
         }
 
         return await this.reservationService.removeMailingReservation(reservationId);
@@ -358,6 +391,10 @@ export class MailingController {
     async runTestMailing(@Param('id') id: string) {
         console.log(`Running test mailing for ID: ${id}`);
 
+        if (this.isProd) {
+            throw new NotFoundException();
+        }
+
         return await this.mailingScheduleService.runMailingById(parseInt(id, 10));
     }
 
@@ -366,10 +403,19 @@ export class MailingController {
     @ApiParam({ name: 'id', description: 'ID рассылки' })
     @ApiResponse({ status: 200, description: 'Рассылка успешно удалена.' })
     @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
-    async deleteMailing(@Param('id') id: string) {
+    async deleteMailing(@Param('id') id: string, @CurrentUser() user?: AuthUser) {
         const mailingId = parseInt(id, 10);
         if (isNaN(mailingId)) {
             throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
+        }
+
+        if (this.isProd) {
+            if (!user) {
+                throw new UnauthorizedException('Требуется авторизация.');
+            }
+            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailingId))) {
+                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
+            }
         }
 
         return await this.mailingService.deleteMailing(mailingId);
@@ -452,10 +498,10 @@ export class MailingController {
                     channelId: { type: 'string', example: '-1001234567890', nullable: true },
                     isChannel: { type: 'boolean', example: false },
                     botLink: { type: 'string', example: 'https://t.me/example_bot', nullable: true },
-                    status: { 
-                        type: 'string', 
-                        enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'], 
-                        example: 'PENDING' 
+                    status: {
+                        type: 'string',
+                        enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'],
+                        example: 'PENDING'
                     },
                     isActive: { type: 'boolean', example: false },
                     postContent: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
