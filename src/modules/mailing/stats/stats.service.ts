@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "prisma/prisma.service";
 import { ConfigService } from "@nestjs/config";
 import {
@@ -466,6 +466,70 @@ ${!stats.isFinished ? '<i>Начато ' + stats.queueStart.toString() + '</i>' 
         });
 
         return await this.groupSellerReservationsByMonth(reservations, months);
+    }
+
+    /**
+     * Возвращает среднее кол-во переходов в продавце по всем ботам (avg_daily_views за весь период активности бота)
+     * Формат ответа:
+     * {
+     *   bots: [{ avg_daily_views: number, link: string, name: string }],
+     *   status: 'success'
+     * }
+     */
+    async getSellerBotsAverageDailyViews(userId: number, requestSecret?: string): Promise<{ bots: Array<{ avg_daily_views: number; link: string; name: string }>; status: string }> {
+        const now = new Date();
+
+        const secretKey = this.configService.get('SECRET_KEY');
+        if (requestSecret !== secretKey) {
+            throw new ForbiddenException('Invalid request secret');
+        }
+
+        // Получаем всех продавцов (ботов) пользователя вместе с их подтверждёнными резервациями
+        const bots = await this.prisma.botSeller.findMany({
+            where: { user: {
+                telegramId: String(userId)
+            } },
+            include: {
+                mailingReservations: {
+                    where: { adminApprovalStatus: 'APPROVED' },
+                    orderBy: { processedAt: 'asc' }
+                }
+            }
+        });
+
+        const resultBots: Array<{ avg_daily_views: number; link: string; name: string }> = bots.map(bot => {
+            const reservations = bot.mailingReservations || [];
+
+            // Если бот не канал (isChannel = false) — возвращаем viewCount последней (самой свежей) резервации
+            if (!bot.isChannel) {
+                const last = reservations.length > 0 ? reservations[reservations.length - 1] : null;
+                const lastViews = last ? (last.viewCount || 0) : 0;
+                const name = bot.title || (bot.link ? String(bot.link).split('/').pop() || '' : '');
+                return {
+                    avg_daily_views: lastViews,
+                    link: bot.link || '',
+                    name
+                };
+            }
+
+            // Для каналов (isChannel = true) — считаем среднее значение по всем резервациям (не нормируем по дням)
+            if (reservations.length === 0) {
+                const name = bot.title || (bot.link ? String(bot.link).split('/').pop() || '' : '');
+                return { avg_daily_views: 0, link: bot.link || '', name };
+            }
+
+            const totalViews = reservations.reduce((sum, r) => sum + (r.viewCount || 0), 0);
+            const avgPerReservation = Math.round(totalViews / reservations.length);
+            const name = bot.title || (bot.link ? String(bot.link).split('/').pop() || '' : '');
+
+            return {
+                avg_daily_views: avgPerReservation,
+                link: bot.link || '',
+                name
+            };
+        });
+
+        return { bots: resultBots, status: 'success' };
     }
 
 

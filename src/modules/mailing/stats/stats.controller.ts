@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseIntPipe, Query } from "@nestjs/common";
+import { Controller, ForbiddenException, Get, Headers, Param, ParseIntPipe, Query } from "@nestjs/common";
 import { StatsService } from "./stats.service";
 import { UserMailingStatistics, BotStatistics, ChannelStatistics, SellerStatistics, MonthlyUserStatistics, MonthlySellerStatistics } from "./stats.types";
 
@@ -72,4 +72,13 @@ export class StatsController {
     async getMailingReservationDetails(@Param('reservationId', ParseIntPipe) reservationId: number) {
         return await this.statsService.getMailingReservationDetails(reservationId);
     }
+
+    @Get('bots/user/:userId')
+    async getSellerBotsAverageDailyViews(@Param('userId', ParseIntPipe) userId: number, @Headers('X-Request-Secret') requestSecret?: string): Promise<{ bots: Array<{ avg_daily_views: number; link: string; name: string }>; status: string }> {
+        if (!requestSecret) {
+            throw new ForbiddenException('Request secret is missing');
+        }
+        return await this.statsService.getSellerBotsAverageDailyViews(userId, requestSecret);
+    }
+
 }
