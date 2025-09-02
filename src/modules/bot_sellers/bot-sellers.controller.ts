@@ -400,4 +400,21 @@ export class BotSellersController {
 
     return this.botSellersService.uploadStatistics(+id, statisticsFile);
   }
-}
+
+  @Patch(':botId/referral')
+  async updateReferralStatus(
+    @Param('botId') botId: string,
+    @CurrentUser() user?: AuthUser
+  ) {
+    if (this.isProd) {
+      if (!user) {
+        throw new UnauthorizedException('Требуется авторизация.');
+      }
+      if (!(await this.botSellersService.isUserOwningBot(user.telegramId, +botId))) {
+        throw new ForbiddenException('У вас нет прав на изменение этого бота.');
+      }
+    }
+
+    return this.botSellersService.updateReferralStatus(+botId);
+  }
+} 

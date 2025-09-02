@@ -34,6 +34,22 @@ export class BotSellersService {
     return crypto.randomBytes(16).toString('hex');
   }
 
+  async updateReferralStatus(botId: number) {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botId },
+    });
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botId} not found`);
+    }
+
+
+    return this.prisma.botSeller.update({
+      where: { id: botId },
+      data: { isIncludedInReferrals: !botSeller.isIncludedInReferrals },
+    });
+  }
+
   async getBotSellerOwnerTelegramId(botSellerId: number): Promise<string> {
     const botSeller = await this.prisma.botSeller.findUnique({
       where: { id: botSellerId },

@@ -476,19 +476,17 @@ ${!stats.isFinished ? '<i>Начато ' + stats.queueStart.toString() + '</i>' 
      *   status: 'success'
      * }
      */
-    async getSellerBotsAverageDailyViews(userId: number, requestSecret?: string): Promise<{ bots: Array<{ avg_daily_views: number; link: string; name: string }>; status: string }> {
+    async getSellerBotsAverageDailyViews(userId: number, isAllResources: boolean): Promise<{ bots: Array<{ avg_daily_views: number; link: string; name: string }>; status: string }> {
         const now = new Date();
-
-        const secretKey = this.configService.get('SECRET_KEY');
-        if (requestSecret !== secretKey) {
-            throw new ForbiddenException('Invalid request secret');
-        }
 
         // Получаем всех продавцов (ботов) пользователя вместе с их подтверждёнными резервациями
         const bots = await this.prisma.botSeller.findMany({
-            where: { user: {
-                telegramId: String(userId)
-            } },
+            where: { 
+                user: {
+                    telegramId: String(userId)
+                },
+                ...(!isAllResources && { isIncludedInReferrals: true })
+            },
             include: {
                 mailingReservations: {
                     where: { adminApprovalStatus: 'APPROVED' },
@@ -523,6 +521,7 @@ ${!stats.isFinished ? '<i>Начато ' + stats.queueStart.toString() + '</i>' 
             const name = bot.title || (bot.link ? String(bot.link).split('/').pop() || '' : '');
 
             return {
+                id: bot.id,
                 avg_daily_views: avgPerReservation,
                 link: bot.link || '',
                 name

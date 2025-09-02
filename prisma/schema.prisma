@@ -79,6 +79,7 @@ model BotSeller {
   statisticsFilePath String?               // путь к файлу статистики бота
   title String?                     // название бота
   avatarUrl String?                // URL аватара бота
+  isIncludedInReferrals Boolean @default(true) // Включен ли бот в реферальную программу
 
 
   // Bot statistics

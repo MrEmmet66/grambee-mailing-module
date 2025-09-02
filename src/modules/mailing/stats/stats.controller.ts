@@ -74,11 +74,8 @@ export class StatsController {
     }
 
     @Get('bots/user/:userId')
-    async getSellerBotsAverageDailyViews(@Param('userId', ParseIntPipe) userId: number, @Headers('X-Request-Secret') requestSecret?: string): Promise<{ bots: Array<{ avg_daily_views: number; link: string; name: string }>; status: string }> {
-        if (!requestSecret) {
-            throw new ForbiddenException('Request secret is missing');
-        }
-        return await this.statsService.getSellerBotsAverageDailyViews(userId, requestSecret);
+    async getSellerBotsAverageDailyViews(@Param('userId', ParseIntPipe) userId: number, @Query('isAllResources') isAllResources: boolean): Promise<{ bots: Array<{ avg_daily_views: number; link: string; name: string }>; status: string }> {
+        return await this.statsService.getSellerBotsAverageDailyViews(userId, isAllResources);
     }
 
 }
