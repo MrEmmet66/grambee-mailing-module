@@ -1,6 +1,7 @@
-import { Controller, ForbiddenException, Get, Headers, Param, ParseIntPipe, Query } from "@nestjs/common";
+import { Controller, ForbiddenException, Get, Headers, Param, ParseIntPipe, Query, UseGuards } from "@nestjs/common";
 import { StatsService } from "./stats.service";
 import { UserMailingStatistics, BotStatistics, ChannelStatistics, SellerStatistics, MonthlyUserStatistics, MonthlySellerStatistics } from "./stats.types";
+import { SecretKeyGuard } from "src/modules/auth/guards/secretKey.guard";
 
 @Controller('stats')
 export class StatsController {
@@ -9,6 +10,13 @@ export class StatsController {
     @Get('user/:userId/mailings')
     async getUserMailingStatistics(@Param('userId', ParseIntPipe) userId: number): Promise<UserMailingStatistics> {
         return await this.statsService.getUserMailingStatistics(userId);
+    }
+
+    @Get('user/:userId/mailings/count')
+    @UseGuards(SecretKeyGuard)
+    async getUserMailingReservationsCount(@Param('userId', ParseIntPipe) userId: number): Promise<{ count: number }> {
+        const count = await this.statsService.getUserMailingReservationsCount(userId);
+        return { count };
     }
 
     

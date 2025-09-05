@@ -50,6 +50,17 @@ export class StatsService {
         };
     }
 
+    async getUserMailingReservationsCount(userTelegramId: number): Promise<number> {
+        const count = await this.prisma.mailingReservation.count({
+            where: { mailing: {
+                user: {
+                    telegramId: String(userTelegramId)
+                }
+            }}
+        });
+        return count;
+    }
+
     async getBotStatisticsById(botId: number): Promise<SellerStatistics> {
         const botSeller = await this.prisma.botSeller.findUnique({ where: { id: botId } });
         if (!botSeller) throw new NotFoundException(`Bot seller with id ${botId} not found`);
