@@ -19,6 +19,7 @@ import { BotSeller, MailingReservation, MailingTargetBots } from '@prisma/client
 import { BalanceService } from '../../balance/balance.service';
 import { ReservationService } from './reservation.service';
 import { ProcessorService } from './processor.service';
+import { resolveTelegramTargets } from '../../telegram/telegram-targets';
 
 @Injectable()
 export class MailingService {
@@ -395,7 +396,7 @@ export class MailingService {
     }
 
     async updateChannelViews(reservation: MailingReservation) {
-        const chatId = this.configService.get<string>('ADMIN_CHAT_ID', '-1002677251791');
+        const { adminChatId: chatId } = resolveTelegramTargets(this.configService);
         if (!reservation.forwardedMessageId) {
             this.logger.warn(`Reservation ${reservation.id} does not have a forwarded message ID`);
             return;

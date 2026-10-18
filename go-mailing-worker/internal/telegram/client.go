@@ -80,8 +80,8 @@ func (c *Client) SendMediaMessage(chatID string, messageData models.MessageData,
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", c.token, endpoint)
 
-	// Получаем MAIN_SERVICE_URL из переменных окружения
-	mainServiceUrl := "https://mailingrambee.pro/api/v1"
+	// Базовый URL сервиса, откуда воркер забирает медиа
+	mainServiceUrl := os.Getenv("MAIN_SERVICE_URL")
 	mediaPath := messageData.PostMedia
 
 	// Если это относительный путь и MAIN_SERVICE_URL задан, формируем полный URL
