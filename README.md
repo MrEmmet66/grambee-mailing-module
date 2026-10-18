@@ -69,7 +69,7 @@ The API and the worker share Redis. The API enqueues and manages jobs through th
 
 ## Delivery worker (Go)
 
-This is the part with the most interesting engineering, so it lives on its own:
+The worker is a separate service because sending is long-running and rate-limited, and it needs to keep many send jobs isolated from each other:
 
 - **Adaptive rate limiting.** Each job uses a token-bucket limiter that starts at a conservative rate and adjusts it: it speeds up after a run of successful sends and backs off on `FLOOD_WAIT` responses. A few limiters implement the same interface and can be swapped.
 - **One process per mailing.** The worker manager spawns a dedicated OS process per mailing, tracks it, and cleans up stale or zombie processes. Jobs can be stopped gracefully via `SIGTERM` with a forced kill as a fallback.
