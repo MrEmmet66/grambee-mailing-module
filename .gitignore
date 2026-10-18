@@ -3,6 +3,9 @@ node_modules/
 dist/
 build/
 
+# npm is the package manager here, package-lock.json is authoritative
+yarn.lock
+
 # Environment files (never commit real credentials)
 .env
 .env.*
