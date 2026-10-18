@@ -1,3 +1,6 @@
+import { CommissionsModule } from './modules/commissions/commissions.module';
+import { HealthController } from './modules/health.controller';
+import { MailingCheckoutService } from './modules/mailing/services/mailingcheckout.service';
 import { PrismaModule } from 'prisma/prisma.module';
 
 import { MailingModule } from './modules/mailing/mailing.module';
@@ -11,9 +14,11 @@ import { ServeStaticModule } from '@nestjs/serve-static';
 import { ScheduleModule } from '@nestjs/schedule';
 import { BalanceModule } from './modules/balance/balance.module';
 import { StatsModule } from './modules/mailing/stats/stats.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
+    CommissionsModule,
     ScheduleModule.forRoot(),
     ServeStaticModule.forRoot({
       rootPath: `${process.cwd()}/uploads`,
@@ -33,9 +38,11 @@ import { StatsModule } from './modules/mailing/stats/stats.module';
     UsersModule,
     TelegramModule,
     BotSellersModule,
-    StatsModule
+    StatsModule,
+    AuthModule
   ],
   controllers: [
+    HealthController,
   ],
   providers: [
   ],

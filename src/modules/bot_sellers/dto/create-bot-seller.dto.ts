@@ -17,11 +17,11 @@ export class CreateBotSellerDto {
 
   @ApiProperty({ description: 'Токен бота Telegram' })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @Matches(/^\d+:[A-Za-z0-9_-]{35,}$/, {
     message: 'Bot token should match the Telegram bot token format (e.g. 123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi)'
   })
-  botToken: string;
+  botToken?: string;
 
   @ApiProperty({ description: 'Данные о пользователях в формате JSON', required: false })
   @IsOptional()
@@ -32,38 +32,32 @@ export class CreateBotSellerDto {
   @IsOptional()
   description?: string;
 
-  @ApiProperty({ description: 'Фиксированная цена', required: false })
+  @ApiProperty({ description: 'Фиксированная цена', required: true })
   @IsNumber()
   @IsOptional()
   fixedPrice?: number;
 
-  @ApiProperty({ description: 'Цена за подписчика', required: false })
-  @IsNumber()
-  @IsOptional()
-  subscriberPrice?: number;
 
   @ApiProperty({ description: 'Ссылка на бота' })
   @IsString()
-  @IsNotEmpty()
+  @ValidateIf(o => o.isChannel === 'true')
   link: string;
 
 
   @ApiProperty({ description: 'Является ли бот каналом', default: false, required: false })
-  @IsBoolean()
   @IsOptional()
-  isChannel?: boolean;
+  isChannel?: string;
 
-  @ApiProperty({ 
-    description: 'Файл статистики пользователей бота (.txt)', 
-    type: 'string', 
-    format: 'binary',
-    required: false 
-  })
-  @IsOptional()
-  statisticsFile?: Express.Multer.File;
-
-  @IsString()
-  @ValidateIf(o => o.isChannel === true)
-  @ApiProperty({ description: 'ID канала', required: false })
-  channelId?: string;
 } 
+
+export interface CreateBotSellerFormData {
+  userId?: number;
+  telegramId?: string;
+  botToken?: string | null;
+  usersData?: any;
+  description?: string;
+  fixedPrice?: number;
+  link?: string;
+  isChannel?: boolean;
+  statisticsFile?: Express.Multer.File;
+}

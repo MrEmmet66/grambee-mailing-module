@@ -17,6 +17,9 @@ import { forwardRef } from '@nestjs/common';
 import { MailingPaymentService } from './services/payment.service';
 import { BalanceModule } from '../balance/balance.module';
 import { ReservationService } from './services/reservation.service';
+import { ProcessorService } from './services/processor.service';
+import { ProcessorController } from './processor.controller';
+import { MailingCheckoutService } from './services/mailingcheckout.service';
 
 @Module({
     imports: [
@@ -36,7 +39,8 @@ import { ReservationService } from './services/reservation.service';
             }),
         }),
     ],
-    controllers: [MailingController],    providers: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService],
-    exports: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService],
+    controllers: [MailingController, ProcessorController],
+    providers: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService, ProcessorService, MailingCheckoutService],
+    exports: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService, ProcessorService, MailingCheckoutService],
 })
 export class MailingModule {}

@@ -6,6 +6,7 @@ import { TelegramService } from '../../telegram/telegram.service';
 import { CreateMailingReservationDto } from '../dto/createMailingReservation.dto';
 import { ReservationCancellationResult, ReservationCreationResult } from '../types/reservation.types';
 import { MailingReservation } from '@prisma/client';
+import { CompleteMailingDto } from '../dto/completeMailing.dto';
 
 @Injectable()
 export class ReservationService {
@@ -180,8 +181,7 @@ export class ReservationService {
             const updatedMailing = await this.prismaService.mailing.update({
                 where: { id: mailingId },
                 data: {
-                    isActive: false,
-                    status: 'COMPLETED'
+                    isActive: false
                 }
             });
 
@@ -192,19 +192,6 @@ export class ReservationService {
         return null;
     }
 
-    async getMailingReservationByLink(link: string) {
-        return await this.prismaService.mailingReservation.findFirst({
-            where: {
-                trackingLink: link,
-                isProcessed: true,
-                adminApprovalStatus: { not: 'FROZEN' }
-            },
-            include: {
-                mailing: true,
-                botSeller: true
-            }
-        });
-    }
 
     async reserveMailingDay(dto: CreateMailingReservationDto): Promise<ReservationCreationResult> {
         if (!Array.isArray(dto.dates) || dto.dates.length === 0) {
@@ -226,8 +213,10 @@ export class ReservationService {
         }
 
         // Получаем комиссии сервиса из конфига
-        const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 25);
-        const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.03);
+        const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 10);
+        const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.00005);
+        const serviceDefaultSubscriberPrice = this.configService.get<number>('SERVICE_DEFAULT_SUBSCRIBER_PRICE', 0.0005);
+        const serviceChannelDefaultSubscriberPrice = this.configService.get<number>('SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE', 0.0002);
 
         // Получаем пользователя из мейлинга для холда баланса
         const user = await this.prismaService.user.findUnique({
@@ -254,72 +243,70 @@ export class ReservationService {
                 throw new ConflictException(`Mailing day already reserved: ${date}`);
             }
 
+            const lockedDay = await this.prismaService.lockedDays.findFirst({
+                where: {
+                    date: date,
+                    botSellerId: dto.sellerId,
+                }
+            });
+            if (lockedDay) {
+                throw new ConflictException(`Этот день занят. Пожалуйста, выберите другой.`);
+            }
+
+
             // Расчет стоимости и комиссии
             let heldAmount = 0;
             let baseAmount = 0;
             let serviceCommission = 0;
             if (dto.paymentType === 'fixed') {
-                baseAmount = botSeller.fixedPrice || 0;
-                serviceCommission = serviceCommissionFixed;
+                baseAmount = Number(botSeller.fixedPrice) || 0;
+                // Комиссия всегда процент от стоимости продавца
+                serviceCommission = baseAmount * ((Number(serviceCommissionFixed) || 0) / 100);
                 heldAmount = baseAmount + serviceCommission;
             } else if (dto.paymentType === 'subscriber') {
-                if (mailing.botToken === null) {
-                    throw new PreconditionFailedException('Bot token is required for subscriber payment type');
-                }
-                if (mailing.isChannel && mailing.channelId !== null) {
-                    const maxUsers = botSeller.channelAudience || 0;
-                    if (maxUsers <= 0) {
-                        throw new PreconditionFailedException('Channel audience data is required for subscriber payment');
-                    } else {
-                        baseAmount = (botSeller.subscriberPrice || 0) * maxUsers;
-                        serviceCommission = serviceCommissionPerUser * maxUsers;
-                    }
+                if (botSeller.isChannel) {
+                    baseAmount = Number(botSeller.fixedPrice) || 0;
+                    serviceCommission = Number(serviceCommissionPerUser) || 0;
                 } else {
-                    const maxUsers = botSeller.botLiveAudience || 0;
+                    const maxUsers = Number(botSeller.totalBotAudience) || 0;
                     if (maxUsers <= 0) {
                         throw new PreconditionFailedException('Bot audience data is required for subscriber payment');
                     } else {
-                        baseAmount = (botSeller.subscriberPrice || 0) * maxUsers;
-                        serviceCommission = serviceCommissionPerUser * maxUsers;
+                        baseAmount = Number(serviceDefaultSubscriberPrice) * maxUsers;
+                        serviceCommission = Number(serviceCommissionPerUser) * maxUsers;
                     }
                 }
                 heldAmount = baseAmount + serviceCommission;
             } else {
-                baseAmount = botSeller.fixedPrice || 0;
-                serviceCommission = serviceCommissionFixed;
+                baseAmount = Number(botSeller.fixedPrice) || 0;
+                // Комиссия всегда процент от стоимости продавца
+                serviceCommission = baseAmount * ((Number(serviceCommissionFixed) || 0) / 100);
                 heldAmount = baseAmount + serviceCommission;
             }
-
+            if (isNaN(heldAmount) || heldAmount <= 0) {
+                throw new PreconditionFailedException('Calculated heldAmount is invalid.');
+            }
             // Холдим баланс для каждой даты
             try {
                 this.logger.log(`Holding balance for mailing reservation: ${heldAmount} (date: ${date})`);
                 await this.balanceService.holdBalance(user.telegramId.toString(), {
                     amount: Number(heldAmount.toFixed(2)),
-                    description: `Удержание баланса за резервирование рассылки #${dto.mailingId} для канала ${botSeller.link} на дату ${date}. Базовая стоимость: ${baseAmount}, комиссия сервиса: ${serviceCommission}.`
+                    description: `Оплата рассылки для канала ${botSeller.link} на дату ${date}.`
                 });
             } catch (error) {
                 this.logger.error(`Failed to hold balance for mailing reservation (date: ${date}): ${error.message}`);
                 throw new PreconditionFailedException(`Не удалось зарезервировать средства на дату ${date}: ${error.message}`);
             }
 
-            // Генерируем trackingLink для каждой даты
-            const trackingLink = await this.telegramService.generateTrackingLink(
-                mailing.isChannel,
-                mailing.channelId,
-                dto.mailingId,
-                dto.sellerId,
-                mailing.botLink || '',
-                mailing.botToken || botSeller.botToken
-            );
+
 
             const reservation = await this.prismaService.mailingReservation.create({
                 data: {
                     mailingId: Number(dto.mailingId),
                     botSellerId: Number(dto.sellerId),
                     date: date,
-                    selectedFilters: {}, // или null, если поле допускает null
                     heldAmount: parseFloat(heldAmount.toString()),
-                    trackingLink: trackingLink
+                    trackingLink: mailing.link,
                 }
             });
             reservations.push(reservation);
@@ -338,8 +325,7 @@ export class ReservationService {
                 data: {
                     botSellerId: dto.sellerId,
                     mailingId: dto.mailingId,
-                    link: reservations[0].trackingLink || '',
-                    paymentType: dto.paymentType || 'fixed',
+                    paymentType: dto.paymentType || 'fixed'
                 }
             });
         }
@@ -422,4 +408,110 @@ export class ReservationService {
             }
         };
     }
+
+    async updateReservationViews(reservationId: number, views: number): Promise<MailingReservation> {
+        const reservation = await this.prismaService.mailingReservation.findUnique({
+            where: { id: reservationId }
+        });
+
+        if (!reservation) {
+            throw new NotFoundException(`Reservation with ID ${reservationId} not found`);
+        }
+
+        const updatedReservation = await this.prismaService.mailingReservation.update({
+            where: { id: reservationId },
+            data: {
+                viewCount: views
+            }
+        });
+
+        return updatedReservation;
+    }
+
+    async createQueueRecord(reservationId: number, queueName: string, totalUsers: number) {
+    return this.prismaService.reservationQueue.create({
+        data: {
+            mailingReservationId: reservationId,
+            queueName,
+            totalUsers,
+        },
+    });
+}
+
+async incrementQueueSent(queueName: string, count: number) {
+    return this.prismaService.reservationQueue.updateMany({
+        where: { queueName },
+        data: {
+            sentCount: { increment: count },
+            updatedAt: new Date(),
+        },
+    });
+}
+
+async incrementQueueFailed(queueName: string, count: number) {
+    this.logger.log(`Incrementing failed count for queue ${queueName} by ${count}`);
+    return this.prismaService.reservationQueue.updateMany({
+        where: { queueName },
+        data: {
+            failedCount: { increment: count },
+            updatedAt: new Date(),
+        },
+    });
+}
+
+async completeQueue(dto: CompleteMailingDto) {
+    this.logger.log(`Completing queue ${dto.queueName} with sent: ${dto.sentCount}, failed: ${dto.failedCount}`);
+    
+    // Найдем reservation queue record для получения reservation ID
+    const queueRecord = await this.prismaService.reservationQueue.findFirst({
+        where: { queueName: dto.queueName },
+        include: {
+            mailingReservation: true
+        }
+    });
+
+    if (!queueRecord) {
+        throw new NotFoundException(`Queue record not found for queue: ${dto.queueName}`);
+    }
+
+    const reservationId = queueRecord.mailingReservationId;
+
+    await this.prismaService.botSeller.update({
+        where: { id: queueRecord.mailingReservation.botSellerId },
+        data: {
+            botLiveAudience: dto.sentCount
+        }
+    });
+
+    // Обновляем viewCount в mailing reservation (это количество успешно отправленных сообщений)
+    await this.prismaService.mailingReservation.update({
+        where: { id: reservationId },
+        data: {
+            viewCount: dto.sentCount,
+            isProcessed: true,
+            processedAt: new Date()
+        },
+    });
+
+    // Обновляем статус и счетчики в queue record
+    const updatedQueue = await this.prismaService.reservationQueue.updateMany({
+        where: { queueName: dto.queueName },
+        data: {
+            status: 'COMPLETED',
+            sentCount: dto.sentCount,
+            failedCount: dto.failedCount,
+            updatedAt: new Date(),
+        },
+    });
+
+    this.logger.log(`Queue ${dto.queueName} completed successfully. Reservation ${reservationId} marked as processed with ${dto.sentCount} sent messages`);
+    
+    // Проверяем, можно ли деактивировать рассылку (если все резервации обработаны)
+    if (queueRecord.mailingReservation) {
+        await this.checkAndDeactivateMailing(queueRecord.mailingReservation.mailingId);
+    }
+
+    return updatedQueue;
+}
+
 }

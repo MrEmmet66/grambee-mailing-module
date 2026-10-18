@@ -14,26 +14,13 @@ export class CreateMailingDto {
     })
     userId: number;
 
-    @ApiProperty({ 
-        description: 'ID канала, если рассылка для канала (isChannel = true)',
-        example: '-1001234567890',
-        required: false
-    })
-    channelId?: string;
-
     @ApiProperty({
         description: 'Ссылка на бота, если рассылка для бота (isChannel = false)',
         example: 'https://t.me/example_bot',
         required: false
     })
-    botLink?: string;
+    link?: string;
 
-    @ApiProperty({
-        description: 'Флаг, указывающий на тип рассылки (канал или бот)',
-        example: false,
-        required: false
-    })
-    isChannel?: boolean;
 
     @ApiProperty({ 
         description: 'Содержимое рассылки (текст)', 
@@ -62,27 +49,31 @@ export class CreateMailingDto {
         type: 'string',
         example: 'Перейти'
     })
-    buttonContent: string;
+    buttons: string[];
 }
 
 // This interface represents the form data with file
 export interface CreateMailingFormData {
     botToken?: string;
     userId: number;
-    channelId?: string;
-    botLink?: string;
-    isChannel?: boolean;
+    link?: string;
     content: string;
     mediaType?: string;
-    media?: Express.Multer.File;
-    buttonContent: string;
+    buttons: string | string[];
 }
 
 export interface UpdateMailingContentFormData {
     content: string;
     mediaType?: string;
     media?: Express.Multer.File;
-    buttonContent: string;
+    buttons: string | string[];
+}
+export interface UpdateTargetBotContentFormData {
+    content: string;
+    mediaType?: string;
+    media?: Express.Multer.File;
+    buttons: string | string[];
+    link?: string;
 }
 
 export class UpdateMailingContentDto {
@@ -113,5 +104,5 @@ export class UpdateMailingContentDto {
         type: 'string',
         example: 'Перейти'
     })
-    buttonContent: string;
+    buttons: string[];
 }

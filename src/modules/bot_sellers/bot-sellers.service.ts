@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, forwardRef, Inject, Logger } from '@nestjs/common';
-import { CreateBotSellerDto, UpdateBotSellerDto } from './dto';
+import { CreateBotSellerDto, CreateBotSellerFormData, UpdateBotSellerDto } from './dto';
 import { PrismaService } from 'prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import * as crypto from 'crypto';
@@ -8,8 +8,11 @@ import * as path from 'path';
 import * as readline from 'readline';
 import axios from 'axios';
 import { ConfigService } from '@nestjs/config';
-import { BotSeller, MailingTargetBots } from '@prisma/client';
+import { BotSeller, MailingTargetBots, User } from '@prisma/client';
 import { ApplicationsService } from '../telegram/applications.service';
+import { log } from 'console';
+import { AvatarService } from './avatar.service';
+import { ApplicationSendersService } from '../telegram/applications-sender.service';
 
 @Injectable()
 export class BotSellersService {
@@ -18,8 +21,9 @@ export class BotSellersService {
   constructor(
     private prisma: PrismaService,
     @Inject(forwardRef(() => ApplicationsService))
-    private telegramService: ApplicationsService,
-    private configService: ConfigService
+    private telegramService: ApplicationSendersService,
+    private configService: ConfigService,
+    private readonly avatarService: AvatarService
   ) {
     const botUsersDir = path.join(process.cwd(), 'uploads', 'bot_users');
     if (!fs.existsSync(botUsersDir)) {
@@ -29,6 +33,103 @@ export class BotSellersService {
 
   private generateApiKey(): string {
     return crypto.randomBytes(16).toString('hex');
+  }
+
+  async updateReferralStatus(botId: number) {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botId },
+    });
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botId} not found`);
+    }
+
+
+    return this.prisma.botSeller.update({
+      where: { id: botId },
+      data: { isIncludedInReferrals: !botSeller.isIncludedInReferrals },
+    });
+  }
+
+  async getBotSellerOwnerTelegramId(botSellerId: number): Promise<string> {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+      select: { user: { select: { telegramId: true } } }
+    });
+
+    if (!botSeller || !botSeller.user) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    return botSeller.user.telegramId;
+  }
+
+  private async getChannelDataByLink(link: string): Promise<{ title: string; channelId: string; }> {
+    const botToken = this.configService.get<string>('MAIN_BOT', '');
+    // Определяем тип ссылки: приватная (invite) или публичная (username)
+    // Приватные обычно начинаются с https://t.me/joinchat или https://t.me/+ или имеют invite code
+    const isPrivate = /^https:\/\/t\.me\/(joinchat|\+|invite)/.test(link) || /\b(joinchat|invite|\+)/.test(link);
+    if (isPrivate) {
+      // Приватный канал — используем userbot API
+      return await this.getPrivateChannelDataByLink(link);
+    } else {
+      // Публичный канал — получаем username из ссылки
+      // Примеры: https://t.me/username, t.me/username, @username
+      let username = link;
+      // Удаляем https://t.me/ и t.me/ если есть
+      username = username.replace(/^https?:\/\/t\.me\//, '');
+      username = username.replace(/^t\.me\//, '');
+      // Удаляем @ если есть
+      username = username.replace(/^@/, '');
+      // Удаляем все после ? (например, параметры)
+      username = username.split('?')[0];
+      if (!username) {
+        throw new BadRequestException('Не удалось извлечь username из публичной ссылки');
+      }
+      try {
+        this.logger.log(`Fetching channel info for username: ${username}`);
+        const response = await axios.get(`https://api.telegram.org/bot${botToken}/getChat?chat_id=@${username}`);
+        if (response.data && response.data.ok && response.data.result) {
+          this.logger.log(`Telegram API response for getChat: ${JSON.stringify(response.data)}`);
+
+          return {
+            title: response.data.result.title || response.data.result.username || username,
+            channelId: String(response.data.result.id),
+          };
+        } else {
+          this.logger.warn(`Telegram API returned unexpected data: ${JSON.stringify(response.data)}`);
+          throw new BadRequestException('Telegram API не вернул корректную информацию о канале');
+        }
+      } catch (error: any) {
+        this.logger.error(`Telegram API error: ${error.message}`);
+        throw new BadRequestException('Не удалось получить данные о канале: ' + (error.response?.data?.description || error.message));
+      }
+    }
+  }
+
+  private async getPrivateChannelDataByLink(link: string): Promise<{ title: string; channelId: string; }> {
+    const userBotUrl = this.configService.get<string>('USERBOT_URL');
+    if (!userBotUrl) {
+      throw new BadRequestException('USERBOT_URL is not configured');
+    }
+    try {
+      // Формируем endpoint (например, /getChannelInfo)
+      const endpoint = userBotUrl.endsWith('/') ? userBotUrl + 'getChannelInfo' : userBotUrl + '/getChannelInfo';
+      this.logger.debug(`Requesting userbot API: ${endpoint} with link: ${link}`);
+      const response = await axios.post(endpoint, { inviteLink: link }, { timeout: 10000 });
+      if (response.data && response.data.channelId && response.data.title) {
+        return {
+          title: response.data.title,
+          channelId: response.data.channelId,
+        };
+      } else {
+        this.logger.warn(`Userbot API returned unexpected data: ${JSON.stringify(response.data)}`);
+        throw new BadRequestException('Не удалось получить данные о канале');
+      }
+    } catch (error: any) {
+      this.logger.error(`Userbot API error: ${error.message}`);
+      throw new BadRequestException('Не удалось получить данные о канале: ' + (error.response?.data?.error || error.message));
+    }
   }
 
   async findByMailingId(mailingId: number) {
@@ -55,7 +156,20 @@ export class BotSellersService {
     return botTokenRegex.test(token);
   }
 
-  private async validateStatisticsFile(filePath: string): Promise<boolean> {
+  async getBotSellerOwner(botSellerId): Promise<User> {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+      include: { user: true }
+    });
+
+    if (!botSeller || !botSeller.user) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    return botSeller.user;
+  }
+
+  private async validateStatisticsFile(filePath: string): Promise<number> {
     return new Promise((resolve, reject) => {
       const fileStream = fs.createReadStream(filePath);
       const rl = readline.createInterface({
@@ -65,33 +179,33 @@ export class BotSellersService {
 
       let lineNumber = 0;
       let isValid = true;
+      let userCount = 0;
 
       rl.on('line', (line) => {
         lineNumber++;
         const trimmedLine = line.trim();
-
         if (!trimmedLine) return;
 
-        const telegramId = trimmedLine.includes(':') ? trimmedLine.split(':')[0] : trimmedLine;
-
-        if (!/^\d+$/.test(telegramId)) {
-          isValid = false;
-          rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID at line ${lineNumber}: "${telegramId}". Only numbers are allowed.`));
-          return;
-        }
-
-        if (telegramId.length < 9 || telegramId.length > 10) {
-          isValid = false;
-          rl.close();
-          reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 9-10 digits.`));
-          return;
+        // Универсальный парсинг: достаем все группы цифр из строки
+        const matches = trimmedLine.match(/\d{6,12}/g); // ищем все группы от 6 до 12 цифр подряд
+        if (matches) {
+          for (const telegramId of matches) {
+            // Дополнительная проверка на длину (можно скорректировать диапазон)
+            if (telegramId.length < 6 || telegramId.length > 12) {
+              isValid = false;
+              rl.close();
+              reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 6-12 digits.`));
+              return;
+            }
+            userCount++;
+          }
         }
       });
 
       rl.on('close', () => {
         if (isValid) {
-          resolve(true);
+          resolve(userCount);
+          this.logger.log(`Statistics file processed: ${filePath}, total users: ${userCount}`);
         }
       });
 
@@ -101,28 +215,50 @@ export class BotSellersService {
     });
   }
 
-  async findAllPaged(page: number, limit: number, search: string) {
+  async findAllPaged(page: number, limit: number, search: string, categoriesJson?: string) {
     const skip = (page - 1) * limit;
     const take = limit;
+    const categories = categoriesJson ? JSON.parse(categoriesJson) : null;
 
-    return this.prisma.botSeller.findMany({
-      where: {
-        AND: [
-          { acceptStatus: 'APPROVED' },
+    // Корректный фильтр для поиска
+    const baseWhere: any = {
+      acceptStatus: 'APPROVED',
+      isActive: true,
+    };
 
-
-        ],
+    let where: any = baseWhere;
+    if (search && search.trim() !== '') {
+      where = {
+        ...baseWhere,
         OR: [
-          { botToken: { contains: search, mode: 'insensitive' } },
-          { user: { username: { contains: search, mode: 'insensitive' } } },
+          { link: { contains: search, mode: 'insensitive' } },
+          { category: { in: categories || [] } },
+
         ],
-      },
+      };
+    }
+
+    // Получаем общее количество
+    const totalCount = await this.prisma.botSeller.count({ where });
+    const totalPages = Math.ceil(totalCount / limit);
+
+    // Получаем текущую страницу
+    const items = await this.prisma.botSeller.findMany({
+      where,
       include: {
         user: true,
       },
       skip,
       take,
     });
+
+    return {
+      items,
+      totalPages,
+      totalCount,
+      page,
+      limit,
+    };
   }
 
   private async calculateMAU(botToken: string): Promise<number> {
@@ -199,6 +335,10 @@ export class BotSellersService {
       if (channelInfoResponse.data && channelInfoResponse.data.ok) {
         this.logger.log('Channel Information:');
         this.logger.log(JSON.stringify(channelInfoResponse.data.result, null, 2));
+        if (channelInfoResponse.data.result.has_protected_content === true) {
+          throw new BadRequestException('В канале отключена пересылка сообщений. Пожалуйста, отключите эту опцию чтобы пользоваться сервисом.');
+        }
+
 
         await this.validateBotAdminRights(botToken, channelId);
       } else {
@@ -211,6 +351,8 @@ export class BotSellersService {
       throw new BadRequestException('Failed to verify channel ID: ' + error.message);
     }
   }
+
+
 
   private async validateBotAdminRights(botToken: string, channelId: string): Promise<void> {
     try {
@@ -243,7 +385,7 @@ export class BotSellersService {
     }
   }
 
-  private async getBotInfo(botToken: string): Promise<void> {
+  private async getBotInfo(botToken: string): Promise<any> {
     try {
       const botInfoResponse = await axios.get(
         `https://api.telegram.org/bot${botToken}/getMe`
@@ -252,6 +394,7 @@ export class BotSellersService {
       if (botInfoResponse.data && botInfoResponse.data.ok) {
         this.logger.log('Basic Bot Information:');
         this.logger.log(JSON.stringify(botInfoResponse.data.result, null, 2));
+        return botInfoResponse.data.result;
       } else {
         this.logger.warn('Failed to get basic bot information from Telegram API');
       }
@@ -260,13 +403,13 @@ export class BotSellersService {
     }
   }
 
-  private async handleStatisticsFile(statisticsFile?: Express.Multer.File): Promise<string | null> {
+  private async handleStatisticsFile(statisticsFile?: Express.Multer.File): Promise<{ path: string, userCount: number } | null> {
     if (!statisticsFile) return null;
 
     const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
     try {
-      await this.validateStatisticsFile(filePath);
-      return `/uploads/bot_users/${statisticsFile.filename}`;
+      const userCount = await this.validateStatisticsFile(filePath);
+      return { path: `/uploads/bot_users/${statisticsFile.filename}`, userCount };
     } catch (error) {
       try {
         fs.unlinkSync(filePath);
@@ -277,30 +420,31 @@ export class BotSellersService {
     }
   }
 
-  async create(createBotSellerDto: CreateBotSellerDto, statisticsFile?: Express.Multer.File) {
-    let userId: number;
+  async create(createBotSellerDto: CreateBotSellerFormData, statisticsFile?: Express.Multer.File) {
+    let userId: number = 0;
 
     // Debug log to see the incoming DTO
     this.logger.debug(`Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`);
     this.logger.debug(`isChannel type: ${typeof createBotSellerDto.isChannel}, value: ${createBotSellerDto.isChannel}`);
 
+    const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
+
 
     if (createBotSellerDto.userId) {
-      await this.validateUser(createBotSellerDto.userId);
-      userId = createBotSellerDto.userId;
-    } else if (createBotSellerDto.telegramId) {
-      userId = await this.getUserByTelegramId(createBotSellerDto.telegramId);
-    } else {
-      throw new BadRequestException('Either userId or telegramId must be provided');
+      userId = await this.getUserByTelegramId(String(createBotSellerDto.userId));
     }
+
+    // проверяем botToken только если isChannel = false
 
     const existingBot = await this.prisma.botSeller.findFirst({
       where: {
         OR: [
-          { botToken: createBotSellerDto.botToken },
-          // ✅ Проверяем channelId только если он действительно передан и isChannel = true
-          ...(createBotSellerDto.isChannel === true && createBotSellerDto.channelId ? [{
-            channelId: createBotSellerDto.channelId,
+
+          // ✅ Проверяем botToken только если он действительно передан и isChannel = false
+          ...(createBotSellerDto.isChannel === false && createBotSellerDto.botToken ? [{ botToken: createBotSellerDto.botToken }] : []),
+          // ✅ Проверяем link только если он действительно передан и isChannel = true
+          ...(createBotSellerDto.isChannel === true && createBotSellerDto.link ? [{
+            link: createBotSellerDto.link,
             isChannel: true
           }] : [])
         ]
@@ -311,50 +455,60 @@ export class BotSellersService {
 
 
     if (existingBot) {
-      throw new BadRequestException('A bot with this token or channel ID already exists');
+      throw new BadRequestException('A bot with this token or channel link already exists');
     }
 
-
-    if (!this.validateBotToken(createBotSellerDto.botToken)) {
-      throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
-    }
-
-    // Handle the isChannel value properly - make sure it's a boolean
     const isChannel = createBotSellerDto.isChannel === true;
-    this.logger.debug(`Processed isChannel: ${isChannel}`);
+    let avatarUrl: string | null = null;
+    let channelData: { title: string; channelId: string } | null = null;
+    let botInfo: any = null;
+    let statistics: { path: string, userCount: number } | null = null;
 
-    await this.getBotInfo(createBotSellerDto.botToken);
-
-    // Only validate channel access if isChannel is true and channelId is provided
+    // Validate input and fill required fields
     if (isChannel) {
-      if (!createBotSellerDto.channelId) {
-        throw new BadRequestException('Channel ID is required when isChannel is true');
+      if (!createBotSellerDto.link) {
+        throw new BadRequestException('Channel link is required when isChannel is true');
       }
-      await this.validateChannelAccess(createBotSellerDto.botToken, createBotSellerDto.channelId);
+      channelData = await this.getChannelDataByLink(createBotSellerDto.link);
+      const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
+      await this.validateChannelAccess(mainBotToken, channelData?.channelId);
+      avatarUrl = await this.avatarService.getChannelAvatarUrl(mainBotToken, channelData.channelId);
+      // Statistics for channel not handled here
+    } else {
+      if (!createBotSellerDto.botToken) {
+        throw new BadRequestException('Bot token is required when isChannel is false');
+      }
+      if (!this.validateBotToken(createBotSellerDto.botToken)) {
+        throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
+      }
+      botInfo = await this.getBotInfo(createBotSellerDto.botToken);
+      avatarUrl = await this.avatarService.getBotAvatarUrl(createBotSellerDto.botToken);
+      statistics = await this.handleStatisticsFile(statisticsFile);
+      this.logger.log(`Statistics file processed: ${JSON.stringify(statistics)}`);
     }
-
-    const mau = await this.calculateMAU(createBotSellerDto.botToken);
-    this.logger.log(`[MAU] Bot ${createBotSellerDto.botToken.slice(0, 10)} has ${mau} monthly active users`);
-
-    const apiKey = this.generateApiKey();
-    const statisticsFilePath = await this.handleStatisticsFile(statisticsFile);
 
     // Create a new object with all properties from the DTO, excluding unwanted fields
     const botSellerData = {
       ...createBotSellerDto,
       userId,
-      apiKey,
       acceptStatus: 'PENDING',
-      statisticsFilePath,
+      botToken: !isChannel ? createBotSellerDto.botToken : null,
+      link: isChannel ? createBotSellerDto.link : (botInfo ? `https://t.me/${botInfo.username}` : null),
+      statisticsFilePath: statistics?.path || null,
       usersData: createBotSellerDto.usersData || {},
-      isChannel: isChannel, // Make sure to use the processed boolean value
-      // Only set channelId if isChannel is true and channelId is provided
-      channelId: isChannel ? createBotSellerDto.channelId : null,
+      totalBotAudience: statistics?.userCount || 0,
+      isChannel,
+      channelId: isChannel ? channelData?.channelId : null,
+      title: isChannel ? channelData?.title : null,
+      avatarUrl: avatarUrl || null,
     };
 
-    // Remove telegramId from data sent to Prisma as it's not in the BotSeller model
+    // Remove telegramId and statisticsFile from data sent to Prisma as they're not in the BotSeller model
     if ('telegramId' in botSellerData) {
       delete botSellerData.telegramId;
+    }
+    if ('statisticsFile' in botSellerData) {
+      delete botSellerData.statisticsFile;
     }
 
     this.logger.debug(`Final bot seller data: ${JSON.stringify(botSellerData)}`);
@@ -372,140 +526,6 @@ export class BotSellersService {
     return botSeller;
   }
 
-  async handleMailingEntrance(link: string, userId: number) {
-    this.logger.log(`Handling mailing entrance for user ${userId} with link: ${link}`);
-
-    let mailingReservation;
-
-    // Способ 1: Если это start параметр для бота (m{mailingId}_s{sellerId}_{timestamp})
-    if (link.includes('?start=')) {
-      const startParam = link.split('?start=')[1];
-
-      if (startParam && startParam.startsWith('m')) {
-        const match = startParam.match(/^m(\d+)_s(\d+)_/);
-
-        if (match) {
-          const mailingId = parseInt(match[1]);
-          const sellerId = parseInt(match[2]);
-
-          // Найти активную резервацию для этой рассылки и продавца
-          mailingReservation = await this.prisma.mailingReservation.findFirst({
-            where: {
-              mailingId: mailingId,
-              botSellerId: sellerId,
-              isProcessed: true, // Только обработанные резервации
-              adminApprovalStatus: { not: 'FROZEN' } // Исключить замороженные
-            }
-          });
-
-          this.logger.log(`Found reservation by start param: mailingId=${mailingId}, sellerId=${sellerId}`);
-        }
-      }
-    }
-    // Способ 2: Если это прямая ссылка (invite link)
-    else {
-      mailingReservation = await this.prisma.mailingReservation.findFirst({
-        where: {
-          trackingLink: link,
-          isProcessed: true,
-          adminApprovalStatus: { not: 'FROZEN' }
-        }
-      });
-
-      this.logger.log(`Searching reservation by direct link: ${link}`);
-    }
-
-    if (!mailingReservation) {
-      this.logger.warn(`No active mailing reservation found for link: ${link}`);
-      return null;
-    }
-
-    const now = new Date();
-    const fourHoursAgo = new Date(now.getTime() - 4 * 60 * 60 * 1000); // 4 часа назад
-
-    // Найти последний переход этого пользователя по этой резервации
-    const lastEntrance = await this.prisma.mailingEntrances.findFirst({
-      where: {
-        userTelegramId: userId,
-        mailingReservationId: mailingReservation.id
-      },
-      orderBy: {
-        date: 'desc'
-      }
-    });
-
-    // Проверить, прошло ли 4 часа с последнего перехода
-    if (lastEntrance && lastEntrance.date > fourHoursAgo) {
-      const timeLeft = Math.ceil((lastEntrance.date.getTime() + 4 * 60 * 60 * 1000 - now.getTime()) / (1000 * 60));
-      this.logger.log(`User ${userId} is in freeze period for reservation ${mailingReservation.id}. Time left: ${timeLeft} minutes`);
-
-      return {
-        success: false,
-        message: `Заморозка действует еще ${timeLeft} минут`,
-        timeLeft: timeLeft,
-        lastEntrance: lastEntrance,
-        canCreateNew: false
-      };
-    }
-
-    // Определить, первый ли это переход пользователя
-    const isFirstEntrance = !lastEntrance;
-
-    // Создать новую запись о переходе
-    const entrance = await this.prisma.mailingEntrances.create({
-      data: {
-        userTelegramId: userId,
-        mailingReservationId: mailingReservation.id,
-      }
-    });
-
-    // Обновить счетчик peopleInvited ТОЛЬКО если это первый переход
-    if (isFirstEntrance) {
-      await this.prisma.mailingReservation.update({
-        where: { id: mailingReservation.id },
-        data: {
-          peopleInvited: {
-            increment: 1
-          }
-        }
-      });
-
-      this.logger.log(`✅ FIRST entrance for user ${userId} to reservation ${mailingReservation.id}. Updated peopleInvited counter.`);
-    } else {
-      this.logger.log(`✅ REPEAT entrance for user ${userId} to reservation ${mailingReservation.id} after 4+ hours. No counter update.`);
-    }
-
-    // Получить общую статистику
-    const totalEntrances = await this.prisma.mailingEntrances.count({
-      where: {
-        mailingReservationId: mailingReservation.id
-      }
-    });
-
-    const uniqueUsers = await this.prisma.mailingEntrances.groupBy({
-      by: ['userTelegramId'],
-      where: {
-        mailingReservationId: mailingReservation.id
-      },
-      _count: {
-        userTelegramId: true
-      }
-    });
-
-    this.logger.log(`📊 Reservation ${mailingReservation.id}: entrance #${totalEntrances}, unique users: ${uniqueUsers.length}`);
-
-    return {
-      success: true,
-      entrance: entrance,
-      isFirstEntrance: isFirstEntrance,
-      canCreateNew: true,
-      statistics: {
-        totalEntrances: totalEntrances,
-        uniqueUsers: uniqueUsers.length,
-        reservationId: mailingReservation.id
-      }
-    };
-  }
 
 
   async findAll() {
@@ -513,6 +533,51 @@ export class BotSellersService {
       include: {
         user: true,
       },
+    });
+  }
+
+  async getAllBotSellers() {
+    const now = new Date();
+    
+    // Получаем всех продавцов ботов с информацией о пользователях
+    const botSellers = await this.prisma.botSeller.findMany({
+      include: {
+        user: true,
+        mailingReservations: {
+          where: {
+            date: { gt: now }
+          }
+        },
+        _count: {
+          select: {
+            mailingReservations: {
+              where: { date: { gt: now } }
+            }
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    // Получаем общий заработок по всем рассылкам каждого продавца
+    const earnings = await this.prisma.mailingReservation.groupBy({
+      by: ['botSellerId'],
+      _sum: {
+        paidAmount: true
+      }
+    });
+
+    // Формируем результат с дополнительной информацией
+    return botSellers.map(seller => {
+      const earning = earnings.find(e => e.botSellerId === seller.id);
+      return {
+        ...seller,
+        totalEarnings: earning?._sum.paidAmount ?? 0,
+        activeMailingsCount: seller._count.mailingReservations,
+        upcomingReservations: seller.mailingReservations
+      };
     });
   }
 
@@ -527,9 +592,19 @@ export class BotSellersService {
   }
 
   async update(id: number, updateBotSellerDto: UpdateBotSellerDto) {
-    if (updateBotSellerDto.botToken && !this.validateBotToken(updateBotSellerDto.botToken)) {
-      throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
+    const existingBotSeller = await this.prisma.botSeller.findUnique({
+      where: { id },
+    });
+
+    if (!existingBotSeller) {
+      throw new BadRequestException(`Ресурс не найден`);
     }
+
+    if (existingBotSeller.acceptStatus === 'REJECTED' || existingBotSeller.acceptStatus === 'PENDING') {
+      throw new BadRequestException('Вы не можете редактировать бота, пока он не будет одобрен.');
+    }
+
+
 
     return this.prisma.botSeller.update({
       where: { id },
@@ -537,7 +612,47 @@ export class BotSellersService {
     });
   }
 
+  async isUserOwningBot(userId: string, botSellerId: number): Promise<boolean> {
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+      include: {
+        user: true
+      }
+    });
+
+    return botSeller?.user.telegramId === userId;
+  }
+
   async remove(id: number) {
+    const futureReservations = await this.prisma.mailingReservation.findMany({
+      where: {
+        botSellerId: id,
+        isProcessed: false,
+        date: {
+          gt: new Date(),
+        },
+      },
+    });
+
+    if (futureReservations.length > 0) {
+      throw new BadRequestException('У вашего бота забронированы рассылки, подождите, пока они закончатся.');
+    }
+
+    // Удаляем все связи с MailingTargetBots
+    await this.prisma.mailingTargetBots.deleteMany({
+      where: { botSellerId: id },
+    });
+
+
+    // Удаляем все связи с MailingReservations
+    await this.prisma.mailingReservation.deleteMany({
+      where: { botSellerId: id },
+    });
+
+
+
+
+
     return this.prisma.botSeller.delete({
       where: { id },
     });
@@ -563,17 +678,7 @@ export class BotSellersService {
     });
   }
 
-  async findBotSellerByLink(link: string): Promise<BotSeller | null> {
-    return await this.prisma.botSeller.findFirst({
-      include: {
-        MailingTargetBots: {
-          where: {
-            link: link,
-          }
-        }
-      }
-    });
-  }
+
 
   async findByTelegramId(telegramId: string) {
     const user = await this.prisma.user.findUnique({
@@ -618,8 +723,9 @@ export class BotSellersService {
       by: ['botSellerId'],
       where: {
         botSellerId: { in: sellers.map(s => s.id) },
-        mailing: {
-          isActive: true
+        isProcessed: false,
+        date: {
+          gt: now
         }
       },
       _count: {
@@ -658,14 +764,7 @@ export class BotSellersService {
     });
   }
 
-  async regenerateApiKey(id: number) {
-    const apiKey = this.generateApiKey();
 
-    return this.prisma.botSeller.update({
-      where: { id },
-      data: { apiKey },
-    });
-  }
 
   async updateCategory(id: number, category: 'GAMBLING' | 'OTHER' | 'DATING' | 'GAMES' | 'CRYPTO' | 'FUN' | 'TECH' | 'UTILITY') {
     return this.prisma.botSeller.update({
@@ -673,6 +772,97 @@ export class BotSellersService {
       data: { category },
     });
   }
+
+  async lockDay(date: Date, botSellerId: number) {
+    // Проверяем, что дата не в прошлом
+    const now = new Date();
+    if (date < now) {
+      throw new BadRequestException('Нельзя заблокировать день в прошлом');
+    }
+
+    // Проверяем, что бот-продавец существует
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+    });
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    // Проверяем, что день не заблокирован
+    const existingLock = await this.prisma.lockedDays.findFirst({
+      where: {
+        date: date,
+        botSellerId: botSellerId,
+      },
+    });
+
+    if (existingLock) {
+      throw new BadRequestException(`День ${date.toISOString().split('T')[0]} уже заблокирован для этого бота`);
+    }
+    
+
+    return this.prisma.lockedDays.create({
+      data: {
+        date,
+        botSellerId,
+      },
+    });
+  }
+
+  async getLockedDays(botSellerId: number) {
+    // Проверяем, что бот-продавец существует
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+    });
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    return this.prisma.lockedDays.findMany({
+      where: { botSellerId, date: { gte: new Date() } },
+      orderBy: { date: 'asc' },
+    });
+  }
+
+  async unblockDay(date: Date, botSellerId: number) {
+    // Проверяем, что дата не в прошлом
+    const now = new Date();
+    if (date < now) {
+      throw new BadRequestException('Нельзя разблокировать день в прошлом');
+    }
+
+    // Проверяем, что бот-продавец существует
+    const botSeller = await this.prisma.botSeller.findUnique({
+      where: { id: botSellerId },
+    }); 
+
+    if (!botSeller) {
+      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+    }
+
+    // Проверяем, что день заблокирован
+    const existingLock = await this.prisma.lockedDays.findFirst({
+      where: {
+        date: date,
+        botSellerId: botSellerId,
+      },
+    });
+    
+    if (!existingLock) {
+      throw new BadRequestException(`День ${date.toISOString().split('T')[0]} не заблокирован для этого бота`);
+    }
+
+    // Удаляем блокировку дня
+    return this.prisma.lockedDays.delete({
+      where: {
+        id: existingLock.id,
+      },
+    });
+  }
+
+
 
   async uploadStatistics(id: number, statisticsFile: Express.Multer.File) {
     const botSeller = await this.prisma.botSeller.findUnique({
@@ -683,9 +873,13 @@ export class BotSellersService {
       throw new BadRequestException(`Bot seller with id ${id} not found`);
     }
 
+    if (botSeller.isChannel === true) {
+      throw new BadRequestException('Вы не можете загружать статистику для каналов. Статистика доступна только для ботов.');
+    }
+
     const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
     try {
-      await this.validateStatisticsFile(filePath);
+      const statistics = await this.handleStatisticsFile(statisticsFile);
 
       if (
         botSeller.statisticsFilePath &&
@@ -701,7 +895,7 @@ export class BotSellersService {
         }
       }
 
-      const sanitizedToken = botSeller.botToken.replace(/[^a-zA-Z0-9]/g, '_');
+      const sanitizedToken = botSeller.botToken?.replace(/[^a-zA-Z0-9]/g, '_');
       const newFileName = `${sanitizedToken}_statistics${path.extname(statisticsFile.filename)}`;
       const oldPath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
       const newPath = path.join(process.cwd(), 'uploads', 'bot_users', newFileName);
@@ -711,6 +905,7 @@ export class BotSellersService {
       const updatedBotSeller = await this.prisma.botSeller.update({
         where: { id },
         data: {
+          totalBotAudience: statistics?.userCount,
           statisticsFilePath: `/uploads/bot_users/${newFileName}`
         },
       });
@@ -725,4 +920,4 @@ export class BotSellersService {
       throw error;
     }
   }
-} 
+}

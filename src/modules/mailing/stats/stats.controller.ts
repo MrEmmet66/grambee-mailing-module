@@ -1,17 +1,22 @@
-import { Controller, Get, Param, ParseIntPipe, Query } from "@nestjs/common";
+import { Controller, ForbiddenException, Get, Headers, Param, ParseIntPipe, Query, UseGuards } from "@nestjs/common";
 import { StatsService } from "./stats.service";
 import { UserMailingStatistics, BotStatistics, ChannelStatistics, SellerStatistics, MonthlyUserStatistics, MonthlySellerStatistics } from "./stats.types";
+import { SecretKeyGuard } from "src/modules/auth/guards/secretKey.guard";
 
 @Controller('stats')
 export class StatsController {
     constructor(private readonly statsService: StatsService) {}
 
-    // This controller will handle all the statistics-related endpoints
-    // For example, you can add methods to get statistics about mailings, reservations, etc.
-
     @Get('user/:userId/mailings')
     async getUserMailingStatistics(@Param('userId', ParseIntPipe) userId: number): Promise<UserMailingStatistics> {
         return await this.statsService.getUserMailingStatistics(userId);
+    }
+
+    @Get('user/:userId/mailings/count')
+    @UseGuards(SecretKeyGuard)
+    async getUserMailingReservationsCount(@Param('userId', ParseIntPipe) userId: number): Promise<{ count: number }> {
+        const count = await this.statsService.getUserMailingReservationsCount(userId);
+        return { count };
     }
 
     
@@ -52,7 +57,7 @@ export class StatsController {
     @Get('reservation/:reservationId/bot')
     async getBotStatistics(@Param('reservationId', ParseIntPipe) reservationId: number): Promise<{ raw: BotStatistics; formatted: string }> {
         const stats = await this.statsService.getBotStatistics(reservationId);
-        const formatted = await this.statsService.formatBotStatistics(stats);
+        const formatted = await this.statsService.formatBotStatistics(stats, reservationId);
         
         return {
             raw: stats,
@@ -75,4 +80,10 @@ export class StatsController {
     async getMailingReservationDetails(@Param('reservationId', ParseIntPipe) reservationId: number) {
         return await this.statsService.getMailingReservationDetails(reservationId);
     }
+
+    @Get('bots/user/:userId')
+    async getSellerBotsAverageDailyViews(@Param('userId', ParseIntPipe) userId: number, @Query('isAllResources') isAllResources: boolean): Promise<{ bots: Array<{ avg_daily_views: number; link: string; name: string }>; status: string }> {
+        return await this.statsService.getSellerBotsAverageDailyViews(userId, isAllResources);
+    }
+
 }

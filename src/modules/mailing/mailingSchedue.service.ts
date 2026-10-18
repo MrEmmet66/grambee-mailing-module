@@ -11,7 +11,7 @@ export class MailingScheduleService {
     ) { }
     private readonly logger = new Logger(MailingScheduleService.name);
 
-    @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+    @Cron(CronExpression.EVERY_DAY_AT_3PM)
     async handleDailyMailing() {
         this.logger.log("Running daily mailing task");
         const today = new Date();
@@ -90,7 +90,7 @@ export class MailingScheduleService {
 
         // Фильтруем только активные и одобренные
         const validReservations = allReservations.filter(r =>
-            r.mailing?.isActive && r.mailing?.status === 'APPROVED'
+            r.mailing?.status === 'APPROVED'
         );
 
         this.logger.log(`Valid reservations found: ${validReservations.length}`);

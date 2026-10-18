@@ -7,12 +7,15 @@ services:
       context: .
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "4000:3000"
     environment:
       - NODE_ENV=production
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/mailing_db?schema=public
+      - NODE_OPTIONS=--max-old-space-size=4096
+      - GO_MAILING_WORKER_URL=http://go-mailing-worker:8080
     depends_on:
       - postgres
+      - go-mailing-worker
     networks:
       - app-network
     restart: unless-stopped
@@ -33,7 +36,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: mailing_db
     ports:
-      - "5432:5432"
+      - "5435:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     networks:
@@ -56,6 +59,52 @@ services:
     networks:
       - app-network
     restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: redis
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru --tcp-keepalive 60 --timeout 300
+    # ports:
+    #   - "6379:6379"
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  telethon-api:
+    container_name: telethon-api
+    build:
+      context: ./telethon
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    networks:
+      - app-network
+    restart: unless-stopped
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+  go-mailing-worker:
+    container_name: go-mailing-worker
+    build:
+      context: ./go-mailing-worker
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - GIN_MODE=release
+      - REDIS_ADDR=redis:6379
+      - REDIS_PASSWORD=
+      - REDIS_DB=0
+      - PORT=8080
+      - MAIN_SERVICE_URL=http://nest-app:3000/api/v1
+    depends_on:
+      - redis
+    networks:
+      - app-network
+    restart: unless-stopped
+    volumes:
+      - ./uploads:/app/uploads
+      - ./uploads:/app/uploads
+
 
 networks:
   app-network:

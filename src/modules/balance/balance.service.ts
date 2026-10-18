@@ -15,7 +15,11 @@ export class BalanceService {
     private readonly configService: ConfigService,
     private readonly httpService: HttpService
   ) {
-    this.gatewayUrl = this.configService.get<string>('GATEWAY_URL', 'https://testgramserv.webaipay.ru');
+    const gatewayUrl = this.configService.get<string>('GATEWAY_URL');
+    if (!gatewayUrl) {
+      throw new Error('GATEWAY_URL is not configured. Set it in the environment.');
+    }
+    this.gatewayUrl = gatewayUrl;
   }
 
   
