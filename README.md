@@ -115,6 +115,13 @@ npm run start:dev
 
 All configuration lives in `.env` (see `.env.example` for the full list). The important groups are the database URL, Telegram bot tokens, userbot `api_id`/`api_hash`, JWT secrets, Redis connection and commission settings.
 
+## Tests
+
+```bash
+npm test                                  # NestJS: telegram targets, commissions, balance
+cd go-mailing-worker && go test ./...     # Go: rate limiters and worker handlers
+```
+
 ## Screenshots
 
 <img src="docs/images/swagger.png" alt="Swagger UI" width="100%">
