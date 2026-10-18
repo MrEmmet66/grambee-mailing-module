@@ -1,98 +1,144 @@
+<h1 align="center">Mailing Platform Backend</h1>
+
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  Backend for a two-sided ad-mailing marketplace: bot and channel owners offer their audience,
+  advertisers book promotions on it, and the platform handles moderation, scheduling,
+  delivery, tracking and payouts.
 </p>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
-
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
+<p align="center">
+  <img alt="NestJS" src="https://img.shields.io/badge/NestJS-11-E0234E?logo=nestjs&logoColor=white">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.21-00ADD8?logo=go&logoColor=white">
+  <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white">
+  <img alt="Redis" src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white">
 </p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
 
-## Description
+<!--
+  DEMO
+  If the project is deployed, put a short demo link or a Loom/YouTube walkthrough here, e.g.
+  Demo: https://demo.example.com  (read-only account: demo / demo)
+-->
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Overview
 
-## Project setup
+The platform connects two sides of an advertising market:
+
+- **Owners** register a bot or a channel, upload audience statistics and set a price (fixed, or per acquired subscriber).
+- **Advertisers** create a mailing: post content, media, buttons and a target link, then reserve slots on selected audiences.
+- **Admins** review applications and mailings before they go out.
+
+The backend exposes a REST API for the web client, sends and tracks the mailings, and keeps
+the money side consistent: reservations, holds, commissions, balances and referral payouts.
+
+## Stack
+
+| Layer | Technology |
+| --- | --- |
+| API | NestJS 11, TypeScript, class-validator, Passport + JWT |
+| Data | PostgreSQL, Prisma ORM |
+| Queues / cache | Redis, Bull (Node), asynq (Go) |
+| Delivery worker | Go 1.21, Gin, asynq, logrus |
+| Userbot service | Python 3.11, FastAPI, Telethon |
+| Docs | Swagger (OpenAPI) |
+| Infra | Docker, Docker Compose |
+
+## Architecture
+
+<img src="docs/images/architecture.png" alt="Architecture" width="100%">
+
+<!-- capture: a diagram of the 4 services and how they talk. boxes: Web client -> api (NestJS) -> postgres / redis; api -> go-mailing-worker (REST) -> redis (asynq) -> Telegram Bot API; api -> telethon-api -> Telegram userbot. Draw in draw.io or excalidraw and export PNG. -->
+
+The system is split into three services behind a single HTTP API:
+
+- **`api` (NestJS)** holds the domain and business logic. It is the only service the client talks to, and the only one that touches the database.
+- **`go-mailing-worker`** performs the actual message delivery. It is separate because sending is long-running and rate-limited, and because it needs to run many independent send jobs at once.
+- **`telethon-api` (FastAPI)** wraps a Telegram userbot account for operations a bot account cannot do: resolving private channels, forwarding messages, inviting bots, reading view counts.
+
+The API and the worker share Redis. The API enqueues and manages jobs through the worker's REST endpoints; the worker pulls tasks from asynq queues and talks to Telegram.
+
+## Mailing flow
+
+1. An advertiser creates a mailing with content, media and an invite link.
+2. The advertiser picks target audiences and reserves dates for them. Selecting a slot holds the amount from the balance.
+3. Each reservation goes through admin review.
+4. When a reservation is due, the API asks the worker to start a send job for that audience.
+5. The worker runs the job in its own process, sends the messages with rate limiting, and reports progress back.
+6. On completion the API settles the money: the hold is released, the audience owner is credited, the platform keeps its commission, and referrers are paid out.
+7. Link clicks and post views are tracked and attached to the reservation.
+
+## Delivery worker (Go)
+
+This is the part with the most interesting engineering, so it lives on its own:
+
+- **Adaptive rate limiting.** Each job uses a token-bucket limiter that starts at a conservative rate and adjusts it: it speeds up after a run of successful sends and backs off on `FLOOD_WAIT` responses. A few limiters implement the same interface and can be swapped.
+- **One process per mailing.** The worker manager spawns a dedicated OS process per mailing, tracks it, and cleans up stale or zombie processes. Jobs can be stopped gracefully via `SIGTERM` with a forced kill as a fallback.
+- **Queue management.** Jobs live in asynq queues; task IDs are derived from mailing and chat IDs to avoid duplicate sends.
+- **Metrics.** Throughput, sent and failed counts are tracked per job and exposed through an HTTP endpoint, with asynqmon available for the queues.
+
+## REST API
+
+The API is documented with Swagger and served at `/api/docs`. Modules:
+
+| Module | Responsibility |
+| --- | --- |
+| `auth` | Registration, login, JWT access and refresh tokens |
+| `users` | User accounts |
+| `bot_sellers` | Audience registration (bots and channels), statistics, moderation |
+| `mailing` | Mailing creation, reservations, scheduling, processing, payment |
+| `mailing/stats` | Per-mailing and per-audience statistics |
+| `balance` | Balance and transactions |
+| `commissions` | Commission calculation and payouts |
+| `telegram` | Bot integration, notifications, application handling |
+| `notifications` | In-app notifications |
+
+## Getting started
+
+### With Docker Compose
 
 ```bash
-$ npm install
+cp .env.example .env      # fill in your own values
+docker compose up --build
 ```
 
-## Compile and run the project
+This starts the API (`:4000`), the Go worker (`:8080`), the telethon service (`:8000`), PostgreSQL (`:5435`) and Redis. Database migrations are applied automatically on API start.
+
+### Local development
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm install
+npx prisma migrate dev
+npm run start:dev
 ```
 
-## Run tests
+### Environment
 
-```bash
-# unit tests
-$ npm run test
+All configuration lives in `.env` (see `.env.example` for the full list). The important groups are the database URL, Telegram bot tokens, userbot `api_id`/`api_hash`, JWT secrets, Redis connection and commission settings.
 
-# e2e tests
-$ npm run test:e2e
+## Screenshots
 
-# test coverage
-$ npm run test:cov
+<img src="docs/images/swagger.png" alt="Swagger UI" width="100%">
+
+<!-- capture: open http://localhost:4000/api/docs, expand a couple of endpoints (mailings, bot-sellers), screenshot the request/response panel. -->
+
+<img src="docs/images/worker-dashboard.png" alt="Worker queue dashboard" width="100%">
+
+<!-- capture: the asynqmon dashboard showing active/completed queues and job throughput. -->
+
+## Repository layout
+
+```
+src/                  NestJS API (modules, DTOs, guards, filters)
+prisma/               Prisma schema and migrations
+go-mailing-worker/    Go delivery worker (handlers, rate limiters, worker manager)
+telethon/             FastAPI + Telethon userbot service
+docker-compose.yml    Full local stack
 ```
 
-## Deployment
+## Notes
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+The Go worker and the telethon service run outside the database on purpose: the worker talks to Telegram only, and the userbot service never touches the database. All persistence goes through the API.
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+UNLICENSED (private project).
