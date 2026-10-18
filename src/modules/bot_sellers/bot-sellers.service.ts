@@ -12,6 +12,7 @@ import { BotSeller, MailingTargetBots, User } from '@prisma/client';
 import { ApplicationsService } from '../telegram/applications.service';
 import { log } from 'console';
 import { AvatarService } from './avatar.service';
+import { ApplicationSendersService } from '../telegram/applications-sender.service';
 
 @Injectable()
 export class BotSellersService {
@@ -20,7 +21,7 @@ export class BotSellersService {
   constructor(
     private prisma: PrismaService,
     @Inject(forwardRef(() => ApplicationsService))
-    private telegramService: ApplicationsService,
+    private telegramService: ApplicationSendersService,
     private configService: ConfigService,
     private readonly avatarService: AvatarService
   ) {
@@ -107,7 +108,10 @@ export class BotSellersService {
   }
 
   private async getPrivateChannelDataByLink(link: string): Promise<{ title: string; channelId: string; }> {
-    const userBotUrl = this.configService.get<string>('USERBOT_URL', 'https://api.grambee.net/userBotApi');
+    const userBotUrl = this.configService.get<string>('USERBOT_URL');
+    if (!userBotUrl) {
+      throw new BadRequestException('USERBOT_URL is not configured');
+    }
     try {
       // Формируем endpoint (например, /getChannelInfo)
       const endpoint = userBotUrl.endsWith('/') ? userBotUrl + 'getChannelInfo' : userBotUrl + '/getChannelInfo';

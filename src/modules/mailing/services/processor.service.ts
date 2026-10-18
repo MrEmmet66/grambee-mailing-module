@@ -10,6 +10,8 @@ import { MailingNotifyProps } from 'src/modules/telegram/telegram.types';
 import * as fs from 'fs';
 import * as readline from 'readline';
 import { BotSeller, Mailing, MailingReservation, MailingTargetBots } from '@prisma/client';
+import { ApplicationSendersService } from 'src/modules/telegram/applications-sender.service';
+import { resolveTelegramTargets } from '../../telegram/telegram-targets';
 
 @Injectable()
 export class ProcessorService {
@@ -17,7 +19,7 @@ export class ProcessorService {
     constructor(
         private readonly prismaService: PrismaService,
         @Inject(forwardRef(() => ApplicationsService))
-        private applicationsService: ApplicationsService,
+        private applicationsService: ApplicationSendersService,
         @Inject(forwardRef(() => TelegramService))
         private readonly telegramService: TelegramService,
         private readonly balanceService: BalanceService,
@@ -130,8 +132,7 @@ export class ProcessorService {
             this.logger.log(`Successfully sent message to channel ${botSeller.channelId}`);
             // --- Forward message to ADMIN_CHAT_ID if isChannel ---
             if (botSeller.isChannel && sentMessage && sentMessage.result && sentMessage.result.message_id && reservationId) {
-                const adminChatId = this.configService.get('ADMIN_CHAT_ID', '-1002677251791');
-                const topicId = parseInt(this.configService.get('MAILING_NOTIFY_TOPIC_ID', '15'), 10);
+                const { adminChatId, mailingNotifyTopicId: topicId } = resolveTelegramTargets(this.configService);
                 const forwardUrl = `https://api.telegram.org/bot${mainBotToken}/forwardMessage`;
                 // Формируем тело запроса
                 const forwardBody: any = {
@@ -190,7 +191,7 @@ export class ProcessorService {
                 },
                 inline_keyboard: buttons,
                 rate_limit: 25,
-                admin_chat_id: this.configService.get('MAILINGS_CHAT_ID', '-1002677251791'),
+                admin_chat_id: resolveTelegramTargets(this.configService).mailingsChatId,
                 admin_message_id: 0
             };
 

@@ -130,27 +130,10 @@ export class TelegramService {
   }
 
   async notifyUser(chatId: string, message: string) {
-    const botToken = this.configService.get<string>('MAIN_BOT')
     const gatewayUrl = this.configService.get<string>('GATEWAY_URL');
 
-    if (!botToken || !gatewayUrl) {
-      throw new HttpException('Bot token or gateway URL is not configured', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
-
-    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-
-    // notify user in telegram
-    const response = await firstValueFrom(
-      this.httpService.post(url, {
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'HTML',
-        disable_web_page_preview: true,
-      })
-    );
-
-    if (!response.data.ok) {
-      throw new HttpException(`Failed to send message: ${response.data.description}`, HttpStatus.INTERNAL_SERVER_ERROR);
+    if (!gatewayUrl) {
+      throw new HttpException('Gateway URL is not configured', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
     // Notify user in gateway
