@@ -1,632 +1,681 @@
+import { MEDIA_UPLOAD_OPTIONS } from './media-upload.options';
+import { Owns } from '../auth/guards/resource-owner.guard';
+import { ServiceOnly } from '../auth/decorators/auth-policy.decorator';
 /*
 https://docs.nestjs.com/controllers#controllers
 */
 
-import { Body, Controller, Post, UseInterceptors, UploadedFile, ParseFilePipeBuilder, HttpStatus, Param, Get, Patch, HttpException, Req, Query, Put, Delete, UseGuards, UnauthorizedException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Post,
+  UseInterceptors,
+  UploadedFile,
+  ParseFilePipeBuilder,
+  HttpStatus,
+  Param,
+  Get,
+  Patch,
+  HttpException,
+  Req,
+  Query,
+  Put,
+  Delete,
+  UseGuards,
+  UnauthorizedException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { MailingService } from './services/mailing.service';
 import { ReservationService } from './services/reservation.service';
-import { CreateMailingDto, CreateMailingFormData, UpdateMailingContentFormData, UpdateMailingContentDto, UpdateTargetBotContentFormData } from './dto/createMailing.dto';
+import {
+  CreateMailingDto,
+  CreateMailingFormData,
+  UpdateMailingContentFormData,
+  UpdateMailingContentDto,
+  UpdateTargetBotContentFormData,
+} from './dto/createMailing.dto';
 import { CreateMailingReservationDto } from './dto/createMailingReservation.dto';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
-import { MailingScheduleService } from './mailingSchedue.service';
-import { ApiTags, ApiOperation, ApiResponse, ApiConsumes, ApiBody, ApiParam } from '@nestjs/swagger';
+
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiConsumes,
+  ApiBody,
+  ApiParam,
+} from '@nestjs/swagger';
 import { log } from 'console';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { ConfigService } from '@nestjs/config';
-import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
+
+import {
+  AuthUser,
+  CurrentUser,
+} from '../auth/decorators/current-user.decorator';
 
 @ApiTags('mailings')
 @Controller('mailings')
-// @UseGuards(JwtAuthGuard)
 export class MailingController {
-    private isProd: boolean;
-    constructor(
-        private readonly mailingService: MailingService,
-        private readonly mailingScheduleService: MailingScheduleService,
-        private readonly reservationService: ReservationService,
-        private readonly configService: ConfigService
-    ) {
-        const env = this.configService.get<string>('ENVIRONMENT') ?? process.env.ENVIRONMENT;
-        this.isProd = env === 'production' || env === 'prod';
-    }
+  constructor(
+    private readonly mailingService: MailingService,
+    private readonly reservationService: ReservationService,
+  ) {}
 
-    @Post()
-    @ApiOperation({ summary: 'Создать новую рассылку' })
-    @ApiConsumes('multipart/form-data')
-    @ApiBody({
-        description: 'Данные для создания рассылки с возможностью загрузки медиа-файла',
-        type: CreateMailingDto
-    })
-    @ApiResponse({ status: 201, description: 'Рассылка успешно создана.' })
-    @ApiResponse({ status: 400, description: 'Неверные данные для создания рассылки.' })
-    @UseInterceptors(FileInterceptor('media', {
-        storage: diskStorage({
-            destination: './uploads',
-            filename: (req, file, cb) => {
-                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-                const ext = extname(file.originalname);
-                cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-            },
+  @Post()
+  @ApiOperation({ summary: 'Создать новую рассылку' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description:
+      'Данные для создания рассылки с возможностью загрузки медиа-файла',
+    type: CreateMailingDto,
+  })
+  @ApiResponse({ status: 201, description: 'Рассылка успешно создана.' })
+  @ApiResponse({
+    status: 400,
+    description: 'Неверные данные для создания рассылки.',
+  })
+  @UseInterceptors(FileInterceptor('media', MEDIA_UPLOAD_OPTIONS))
+  async createMailing(
+    @Body() dto: CreateMailingFormData,
+    @UploadedFile(
+      new ParseFilePipeBuilder()
+        .addMaxSizeValidator({
+          maxSize: 10 * 1024 * 1024, // 10MB
+        })
+        .build({
+          errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          fileIsRequired: false, // Changed to false to make file optional
         }),
-    }))
-    async createMailing(
-        @Body() dto: CreateMailingFormData,
-        @UploadedFile(
-            new ParseFilePipeBuilder()
-                .addMaxSizeValidator({
-                    maxSize: 10 * 1024 * 1024, // 10MB
-                })
-                .build({
-                    errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-                    fileIsRequired: false, // Changed to false to make file optional
-                }),
-        ) file: Express.Multer.File,
-        @Req() req: Request
-    ) {
-
-        console.log('got file:', file);
-
-
-        if (!dto.userId) {
-            throw new HttpException('User ID is required', HttpStatus.BAD_REQUEST);
-        }
-
-        if (!dto.content) {
-            throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
-        }
-
-        // Convert userId from string to integer if needed
-        const userId = typeof dto.userId === 'string' ? parseInt(dto.userId, 10) : dto.userId;
-
-        // Prepare data for the service
-        let buttons: string[] = [];
-        // Debug log raw buttons input
-        console.log('RAW BUTTONS:', dto.buttons);
-        if (dto.buttons) {
-            if (typeof dto.buttons === 'string') {
-                try {
-                    const parsed = JSON.parse(dto.buttons);
-                    console.log('PARSED BUTTONS:', parsed);
-                    if (Array.isArray(parsed)) {
-                        buttons = parsed;
-                    } else {
-                        buttons = [];
-                    }
-                } catch (e) {
-                    console.log('BUTTONS PARSE ERROR:', e);
-                    buttons = [];
-                }
-            } else if (Array.isArray(dto.buttons)) {
-                if (
-                    dto.buttons.length === 1 &&
-                    typeof (dto.buttons[0] as string) === 'string' &&
-                    ((dto.buttons[0] as string).startsWith('['))
-                ) {
-                    try {
-                        const parsed = JSON.parse(dto.buttons[0] as string);
-                        console.log('PARSED BUTTONS:', parsed);
-                        if (Array.isArray(parsed)) {
-                            buttons = parsed;
-                        } else {
-                            buttons = [];
-                        }
-                    } catch (e) {
-                        console.log('BUTTONS PARSE ERROR:', e);
-                        buttons = [];
-                    }
-                } else {
-                    buttons = dto.buttons;
-                }
-            }
-        }
-        const mailingData: CreateMailingDto = {
-            botToken: dto.botToken,
-            userId: userId,
-            content: dto.content,
-            mediaType: dto.mediaType || 'photo', // Default to photo if not specified
-            buttons,
-            media: file,
-            link: dto.link, // Optional field
-        };
-
-        // Call the service to create the mailing
-        return await this.mailingService.createMailing(mailingData);
+    )
+    file: Express.Multer.File,
+    @CurrentUser() user: AuthUser,
+  ) {
+    if (!dto.content) {
+      throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
     }
 
-    @Post('reserve')
-    async reserveMailingDay(@Body() dto: CreateMailingReservationDto, @CurrentUser() user?: AuthUser) {
-        if (this.isProd) {
-            if (!user) {
-                throw new UnauthorizedException('Требуется авторизация.');
-            }
-            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, dto.mailingId))) {
-                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
-            }
+    // Ignore any owner ID supplied by the client.
+    const userId = user.id;
+
+    // Prepare data for the service
+    let buttons: string[] = [];
+    // Debug log raw buttons input
+
+    if (dto.buttons) {
+      if (typeof dto.buttons === 'string') {
+        try {
+          const parsed = JSON.parse(dto.buttons);
+
+          if (Array.isArray(parsed)) {
+            buttons = parsed;
+          } else {
+            buttons = [];
+          }
+        } catch (e) {
+          buttons = [];
         }
+      } else if (Array.isArray(dto.buttons)) {
+        if (
+          dto.buttons.length === 1 &&
+          typeof (dto.buttons[0] as string) === 'string' &&
+          (dto.buttons[0] as string).startsWith('[')
+        ) {
+          try {
+            const parsed = JSON.parse(dto.buttons[0] as string);
 
-        return await this.reservationService.reserveMailingDay(dto);
+            if (Array.isArray(parsed)) {
+              buttons = parsed;
+            } else {
+              buttons = [];
+            }
+          } catch (e) {
+            buttons = [];
+          }
+        } else {
+          buttons = dto.buttons;
+        }
+      }
     }
+    const mailingData: CreateMailingDto = {
+      botToken: dto.botToken,
+      userId: userId,
+      content: dto.content,
+      mediaType: dto.mediaType || 'photo', // Default to photo if not specified
+      buttons,
+      media: file,
+      link: dto.link, // Optional field
+    };
 
-    @Patch('/post/:id')
-    @ApiOperation({ summary: 'Обновить контент рассылки' })
-    @ApiConsumes('multipart/form-data')
-    @ApiParam({ name: 'id', description: 'ID рассылки' })
-    @ApiBody({
-        description: 'Данные для обновления контента рассылки с возможностью загрузки медиа-файла',
-        type: UpdateMailingContentDto
-    })
-    @ApiResponse({ status: 200, description: 'Контент рассылки успешно обновлен.' })
-    @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
-    @UseInterceptors(FileInterceptor('media', {
-        storage: diskStorage({
-            destination: './uploads',
-            filename: (req, file, cb) => {
-                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-                const ext = extname(file.originalname);
-                cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-            },
+    // Call the service to create the mailing
+    return await this.mailingService.createMailing(mailingData);
+  }
+
+  @Owns('mailing', 'mailingId', 'body')
+  @Post('reserve')
+  async reserveMailingDay(
+    @Body() dto: CreateMailingReservationDto,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    return await this.reservationService.reserveMailingDay(dto);
+  }
+
+  @Owns('mailing', 'id')
+  @Patch('/post/:id')
+  @ApiOperation({ summary: 'Обновить контент рассылки' })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'id', description: 'ID рассылки' })
+  @ApiBody({
+    description:
+      'Данные для обновления контента рассылки с возможностью загрузки медиа-файла',
+    type: UpdateMailingContentDto,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Контент рассылки успешно обновлен.',
+  })
+  @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
+  @UseInterceptors(FileInterceptor('media', MEDIA_UPLOAD_OPTIONS))
+  async updateMailingContent(
+    @Param('id') id: string,
+    @Body() updateData: UpdateMailingContentFormData,
+    @UploadedFile(
+      new ParseFilePipeBuilder()
+        .addMaxSizeValidator({
+          maxSize: 10 * 1024 * 1024, // 10MB
+        })
+        .build({
+          errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          fileIsRequired: false, // File is optional for updates
         }),
-    }))
-    async updateMailingContent(
-        @Param('id') id: string,
-        @Body() updateData: UpdateMailingContentFormData,
-        @UploadedFile(
-            new ParseFilePipeBuilder()
-                .addMaxSizeValidator({
-                    maxSize: 10 * 1024 * 1024, // 10MB
-                })
-                .build({
-                    errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-                    fileIsRequired: false, // File is optional for updates
-                }),
-        ) file: Express.Multer.File,
-        @CurrentUser() user?: AuthUser
-    ) {
-        const mailingId = parseInt(id, 10);
+    )
+    file: Express.Multer.File,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    const mailingId = parseInt(id, 10);
 
-        if (this.isProd) {
-            if (!user) {
-                throw new UnauthorizedException('Требуется авторизация.');
-            }
-            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailingId))) {
-                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
-            }
-        }
-
-        if (!updateData.content) {
-            throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
-        }
-
-        // Add the uploaded file to the update data
-        let buttons: string[] = [];
-        console.log('RAW BUTTONS (update):', updateData.buttons);
-        if (updateData.buttons) {
-            if (typeof updateData.buttons === 'string') {
-                try {
-                    const parsed = JSON.parse(updateData.buttons);
-                    console.log('PARSED BUTTONS (update):', parsed);
-                    if (Array.isArray(parsed)) {
-                        buttons = parsed;
-                    } else {
-                        buttons = [];
-                    }
-                } catch (e) {
-                    console.log('BUTTONS PARSE ERROR (update):', e);
-                    buttons = [];
-                }
-            } else if (Array.isArray(updateData.buttons)) {
-                buttons = updateData.buttons;
-            }
-        }
-        const updateDataWithFile: UpdateMailingContentFormData = {
-            ...updateData,
-            media: file,
-            buttons
-        };
-
-        console.log('data:', updateDataWithFile);
-
-        return await this.mailingService.updateMailingContent(mailingId, updateDataWithFile);
+    if (!updateData.content) {
+      throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
     }
 
-    @Patch('/targetBot/:id')
-    @ApiOperation({ summary: 'Обновить пост бота' })
-    @ApiConsumes('multipart/form-data')
-    @ApiParam({ name: 'id', description: 'ID поста бота' })
-    @ApiBody({
-        description: 'Данные для обновления поста бота с возможностью загрузки медиа-файла',
-        type: UpdateMailingContentDto
-    })
-    @ApiResponse({ status: 200, description: 'Контент поста бота успешно обновлен.' })
-    @ApiResponse({ status: 404, description: 'Пост бота не найден.' })
-    @UseInterceptors(FileInterceptor('media', {
-        storage: diskStorage({
-            destination: './uploads',
-            filename: (req, file, cb) => {
-                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-                const ext = extname(file.originalname);
-                cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-            },
+    // Add the uploaded file to the update data
+    let buttons: string[] = [];
+
+    if (updateData.buttons) {
+      if (typeof updateData.buttons === 'string') {
+        try {
+          const parsed = JSON.parse(updateData.buttons);
+
+          if (Array.isArray(parsed)) {
+            buttons = parsed;
+          } else {
+            buttons = [];
+          }
+        } catch (e) {
+          buttons = [];
+        }
+      } else if (Array.isArray(updateData.buttons)) {
+        buttons = updateData.buttons;
+      }
+    }
+    const updateDataWithFile: UpdateMailingContentFormData = {
+      ...updateData,
+      media: file,
+      buttons,
+    };
+
+    return await this.mailingService.updateMailingContent(
+      mailingId,
+      updateDataWithFile,
+    );
+  }
+
+  @Owns('target', 'id')
+  @Patch('/targetBot/:id')
+  @ApiOperation({ summary: 'Обновить пост бота' })
+  @ApiConsumes('multipart/form-data')
+  @ApiParam({ name: 'id', description: 'ID поста бота' })
+  @ApiBody({
+    description:
+      'Данные для обновления поста бота с возможностью загрузки медиа-файла',
+    type: UpdateMailingContentDto,
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Контент поста бота успешно обновлен.',
+  })
+  @ApiResponse({ status: 404, description: 'Пост бота не найден.' })
+  @UseInterceptors(FileInterceptor('media', MEDIA_UPLOAD_OPTIONS))
+  async updateTargetBotContent(
+    @Param('id') id: string,
+    @Body() updateData: UpdateTargetBotContentFormData,
+    @UploadedFile(
+      new ParseFilePipeBuilder()
+        .addMaxSizeValidator({
+          maxSize: 10 * 1024 * 1024, // 10MB
+        })
+        .build({
+          errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
+          fileIsRequired: false, // File is optional for updates
         }),
-    }))
-    async updateTargetBotContent(
-        @Param('id') id: string,
-        @Body() updateData: UpdateTargetBotContentFormData,
-        @UploadedFile(
-            new ParseFilePipeBuilder()
-                .addMaxSizeValidator({
-                    maxSize: 10 * 1024 * 1024, // 10MB
-                })
-                .build({
-                    errorHttpStatusCode: HttpStatus.UNPROCESSABLE_ENTITY,
-                    fileIsRequired: false, // File is optional for updates
-                }),
-        ) file: Express.Multer.File,
-        @CurrentUser() user?: AuthUser
-    ) {
+    )
+    file: Express.Multer.File,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    const targetBotId = parseInt(id, 10);
 
+    const mailing =
+      await this.mailingService.getMailingByTargetBot(targetBotId);
 
-        const targetBotId = parseInt(id, 10);
-
-        const mailing = await this.mailingService.getMailingByTargetBot(targetBotId);
-
-        if (!mailing) {
-            throw new NotFoundException(`Рассылка с ID ${targetBotId} не найдена`);
-        }
-
-        if (this.isProd) {
-            if (!user) {
-                throw new UnauthorizedException('Требуется авторизация.');
-            }
-            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailing?.id))) {
-                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
-            }
-        }
-
-
-
-
-        if (!updateData.content) {
-            throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
-        }
-
-
-        // Add the uploaded file to the update data
-        let buttons: string[] = [];
-        console.log('RAW BUTTONS (update):', updateData.buttons);
-        if (updateData.buttons) {
-            if (typeof updateData.buttons === 'string') {
-                try {
-                    const parsed = JSON.parse(updateData.buttons);
-                    console.log('PARSED BUTTONS (update):', parsed);
-                    if (Array.isArray(parsed)) {
-                        buttons = parsed;
-                    } else {
-                        buttons = [];
-                    }
-                } catch (e) {
-                    console.log('BUTTONS PARSE ERROR (update):', e);
-                    buttons = [];
-                }
-            } else if (Array.isArray(updateData.buttons)) {
-                buttons = updateData.buttons;
-            }
-        }
-        const updateDataWithFile: UpdateTargetBotContentFormData = {
-            ...updateData,
-            media: file,
-            buttons
-        };
-
-        console.log('data:', updateDataWithFile);
-
-        return await this.mailingService.updateMailingTargetBotContent(targetBotId, updateDataWithFile);
+    if (!mailing) {
+      throw new NotFoundException(`Рассылка с ID ${targetBotId} не найдена`);
     }
 
-
-    @Delete('reservations/:id')
-    @ApiOperation({
-        summary: 'Отменить резервирование рассылки по ID',
-        description: 'Отменяет резервирование не менее чем за 48 часов до даты. Возвращает покупателю 70%, продавцу 25%, комиссия 5%.'
-    })
-    @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
-    @ApiResponse({ status: 404, description: 'Резервирование не найдено.' })
-    @ApiResponse({ status: 409, description: 'Резервирование нельзя отменить (менее 48 часов до даты или уже обработано).' })
-    @ApiResponse({ status: 412, description: 'Ошибка обработки возврата средств.' })
-    @ApiResponse({ status: 200, description: 'Резервирование рассылки успешно удалено.' })
-    @ApiResponse({ status: 404, description: 'Резервирование рассылки не найдено.' })
-    async deleteMailingReservation(@Param('id') id: string, @CurrentUser() user?: AuthUser) {
-        const reservationId = parseInt(id, 10);
-        if (isNaN(reservationId)) {
-            throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
-        }
-
-        const mailing = await this.mailingService.getMailingByReservationId(reservationId);
-
-        if (this.isProd) {
-            if (!user) {
-                throw new UnauthorizedException('Требуется авторизация.');
-            }
-            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailing.id))) {
-                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
-            }
-        }
-
-        if (!mailing) {
-            throw new NotFoundException(`Mailing with reservation ID ${reservationId} not found`);
-        }
-
-        return await this.reservationService.removeMailingReservation(reservationId);
+    if (!updateData.content) {
+      throw new HttpException('Content is required', HttpStatus.BAD_REQUEST);
     }
 
-    @Get('run-test/:id')
-    @UseGuards()
-    @ApiOperation({ summary: 'Запустить тест рассылки по ID' })
-    @ApiParam({ name: 'id', description: 'ID рассылки' })
-    @ApiResponse({
-        status: 200,
-        description: 'Тестовая рассылка запущена.',
-        schema: {
+    // Add the uploaded file to the update data
+    let buttons: string[] = [];
+
+    if (updateData.buttons) {
+      if (typeof updateData.buttons === 'string') {
+        try {
+          const parsed = JSON.parse(updateData.buttons);
+
+          if (Array.isArray(parsed)) {
+            buttons = parsed;
+          } else {
+            buttons = [];
+          }
+        } catch (e) {
+          buttons = [];
+        }
+      } else if (Array.isArray(updateData.buttons)) {
+        buttons = updateData.buttons;
+      }
+    }
+    const updateDataWithFile: UpdateTargetBotContentFormData = {
+      ...updateData,
+      media: file,
+      buttons,
+    };
+
+    return await this.mailingService.updateMailingTargetBotContent(
+      targetBotId,
+      updateDataWithFile,
+    );
+  }
+
+  @Owns('reservation', 'id')
+  @Delete('reservations/:id')
+  @ApiOperation({
+    summary: 'Отменить резервирование рассылки по ID',
+    description:
+      'Отменяет резервирование не менее чем за 48 часов до даты. Возвращает покупателю 70%, продавцу 25%, комиссия 5%.',
+  })
+  @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
+  @ApiResponse({ status: 404, description: 'Резервирование не найдено.' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Резервирование нельзя отменить (менее 48 часов до даты или уже обработано).',
+  })
+  @ApiResponse({
+    status: 412,
+    description: 'Ошибка обработки возврата средств.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Резервирование рассылки успешно удалено.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Резервирование рассылки не найдено.',
+  })
+  async deleteMailingReservation(
+    @Param('id') id: string,
+    @CurrentUser() user?: AuthUser,
+  ) {
+    const reservationId = parseInt(id, 10);
+    if (isNaN(reservationId)) {
+      throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
+    }
+
+    const mailing =
+      await this.mailingService.getMailingByReservationId(reservationId);
+
+    if (!mailing) {
+      throw new NotFoundException(
+        `Mailing with reservation ID ${reservationId} not found`,
+      );
+    }
+
+    return await this.reservationService.removeMailingReservation(
+      reservationId,
+    );
+  }
+
+  @Owns('mailing', 'id')
+  @Delete(':id')
+  @ApiOperation({ summary: 'Удалить рассылку по ID' })
+  @ApiParam({ name: 'id', description: 'ID рассылки' })
+  @ApiResponse({ status: 200, description: 'Рассылка успешно удалена.' })
+  @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
+  async deleteMailing(@Param('id') id: string, @CurrentUser() user?: AuthUser) {
+    const mailingId = parseInt(id, 10);
+    if (isNaN(mailingId)) {
+      throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
+    }
+
+    return await this.mailingService.deleteMailing(mailingId);
+  }
+
+  @Get('reservations/:sellerId')
+  @ApiOperation({
+    summary: 'Получить календарь доступности для резервирования рассылок',
+  })
+  @ApiParam({ name: 'sellerId', description: 'ID продавца бота' })
+  @ApiResponse({
+    status: 200,
+    description: 'Календарь доступности на 30 дней.',
+  })
+  async getMailingCalendar(@Param('sellerId') sellerId: string) {
+    const sellerIdNum = parseInt(sellerId, 10);
+    if (isNaN(sellerIdNum)) {
+      throw new HttpException('Invalid seller ID', HttpStatus.BAD_REQUEST);
+    }
+
+    return await this.reservationService.getMailingReservationsBySellerId(
+      sellerIdNum,
+    );
+  }
+
+  @Owns('mailing', 'id')
+  @Get('reservations/mailing/:id')
+  async getMailingReservations(@Param('id') id: string) {
+    const mailingId = parseInt(id, 10);
+    if (isNaN(mailingId)) {
+      throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
+    }
+
+    return await this.reservationService.getMailingReservations(mailingId);
+  }
+
+  @Owns('telegramUser', 'userId')
+  @Get('/user/:userId')
+  @ApiOperation({ summary: 'Получить все рассылки пользователя' })
+  @ApiParam({ name: 'userId', description: 'ID пользователя' })
+  @ApiResponse({
+    status: 200,
+    description: 'Список рассылок пользователя.',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', example: 1 },
+          userId: { type: 'number', example: 1 },
+          channelId: {
+            type: 'string',
+            example: '-1001234567890',
+            nullable: true,
+          },
+          isChannel: { type: 'boolean', example: false },
+          botLink: {
+            type: 'string',
+            example: 'https://t.me/example_bot',
+            nullable: true,
+          },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'],
+            example: 'PENDING',
+          },
+          isActive: { type: 'boolean', example: false },
+          postContent: {
+            type: 'string',
+            example: 'Привет! Это тестовая рассылка.',
+          },
+          postButtons: {
+            type: 'object',
+            example: '[{"text":"Перейти","url":"https://example.com"}]',
+          },
+          postMedia: {
+            type: 'string',
+            example: 'uploads/media-123456789.jpg',
+            nullable: true,
+          },
+          postMediaType: { type: 'string', example: 'photo', nullable: true },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Пользователь не найден.' })
+  async getUserMailings(@Param('userId') userId: string) {
+    return await this.mailingService.getUserMailings(parseInt(userId, 10));
+  }
+
+  @ServiceOnly()
+  @Get('/all')
+  @ApiOperation({ summary: 'Получить все рассылки' })
+  @ApiResponse({
+    status: 200,
+    description: 'Список всех рассылок с детальной информацией.',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', example: 1 },
+          userId: { type: 'number', example: 1 },
+          channelId: {
+            type: 'string',
+            example: '-1001234567890',
+            nullable: true,
+          },
+          isChannel: { type: 'boolean', example: false },
+          botLink: {
+            type: 'string',
+            example: 'https://t.me/example_bot',
+            nullable: true,
+          },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'],
+            example: 'PENDING',
+          },
+          isActive: { type: 'boolean', example: false },
+          postContent: {
+            type: 'string',
+            example: 'Привет! Это тестовая рассылка.',
+          },
+          postButtons: {
+            type: 'object',
+            example: '[{"text":"Перейти","url":"https://example.com"}]',
+          },
+          postMedia: {
+            type: 'string',
+            example: 'uploads/media-123456789.jpg',
+            nullable: true,
+          },
+          postMediaType: { type: 'string', example: 'photo', nullable: true },
+          createdAt: { type: 'string', format: 'date-time' },
+          updatedAt: { type: 'string', format: 'date-time' },
+          user: {
             type: 'object',
             properties: {
-                mailingId: { type: 'number', example: 1 },
-                processedReservations: { type: 'number', example: 2 },
-                results: {
-                    type: 'array',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            reservationId: { type: 'number', example: 1 },
-                            botSellerId: { type: 'number', example: 3 },
-                            status: { type: 'string', example: 'success' }
-                        }
-                    }
-                }
-            }
-        }
-    })
-    @ApiResponse({ status: 404, description: 'Рассылка не найдена или неактивна.' })
-    async runTestMailing(@Param('id') id: string) {
-        console.log(`Running test mailing for ID: ${id}`);
-
-        if (this.isProd) {
-            throw new NotFoundException();
-        }
-
-        return await this.mailingScheduleService.runMailingById(parseInt(id, 10));
-    }
-
-    @Delete(':id')
-    @ApiOperation({ summary: 'Удалить рассылку по ID' })
-    @ApiParam({ name: 'id', description: 'ID рассылки' })
-    @ApiResponse({ status: 200, description: 'Рассылка успешно удалена.' })
-    @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
-    async deleteMailing(@Param('id') id: string, @CurrentUser() user?: AuthUser) {
-        const mailingId = parseInt(id, 10);
-        if (isNaN(mailingId)) {
-            throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
-        }
-
-        if (this.isProd) {
-            if (!user) {
-                throw new UnauthorizedException('Требуется авторизация.');
-            }
-            if (!(await this.mailingService.isUserOwningMailing(user.telegramId, mailingId))) {
-                throw new ForbiddenException('У вас нет прав на изменение этой рассылки.');
-            }
-        }
-
-        return await this.mailingService.deleteMailing(mailingId);
-    }
-
-    @Get('reservations/:sellerId')
-    @ApiOperation({ summary: 'Получить календарь доступности для резервирования рассылок' })
-    @ApiParam({ name: 'sellerId', description: 'ID продавца бота' })
-    @ApiResponse({
-        status: 200,
-        description: 'Календарь доступности на 30 дней.',
-    })
-    async getMailingCalendar(@Param('sellerId') sellerId: string) {
-        const sellerIdNum = parseInt(sellerId, 10);
-        if (isNaN(sellerIdNum)) {
-            throw new HttpException('Invalid seller ID', HttpStatus.BAD_REQUEST);
-        }
-
-        return await this.reservationService.getMailingReservationsBySellerId(sellerIdNum);
-    }
-
-    @Get('reservations/mailing/:id')
-    async getMailingReservations(@Param('id') id: string) {
-        const mailingId = parseInt(id, 10);
-        if (isNaN(mailingId)) {
-            throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
-        }
-
-        return await this.reservationService.getMailingReservations(mailingId);
-    }
-
-
-
-
-    @Get('/user/:userId')
-    @ApiOperation({ summary: 'Получить все рассылки пользователя' })
-    @ApiParam({ name: 'userId', description: 'ID пользователя' })
-    @ApiResponse({
-        status: 200,
-        description: 'Список рассылок пользователя.',
-        schema: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    id: { type: 'number', example: 1 },
-                    userId: { type: 'number', example: 1 },
-                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ', nullable: true },
-                    channelId: { type: 'string', example: '-1001234567890', nullable: true },
-                    isChannel: { type: 'boolean', example: false },
-                    botLink: { type: 'string', example: 'https://t.me/example_bot', nullable: true },
-                    status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'], example: 'PENDING' },
-                    isActive: { type: 'boolean', example: false },
-                    postContent: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
-                    postButtons: { type: 'object', example: '[{"text":"Перейти","url":"https://example.com"}]' },
-                    postMedia: { type: 'string', example: 'uploads/media-123456789.jpg', nullable: true },
-                    postMediaType: { type: 'string', example: 'photo', nullable: true }
-                }
-            }
-        }
-    })
-    @ApiResponse({ status: 404, description: 'Пользователь не найден.' })
-    async getUserMailings(@Param('userId') userId: string) {
-        return await this.mailingService.getUserMailings(parseInt(userId, 10));
-    }
-
-    @Get('/all')
-    @ApiOperation({ summary: 'Получить все рассылки' })
-    @ApiResponse({
-        status: 200,
-        description: 'Список всех рассылок с детальной информацией.',
-        schema: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    id: { type: 'number', example: 1 },
-                    userId: { type: 'number', example: 1 },
-                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ', nullable: true },
-                    channelId: { type: 'string', example: '-1001234567890', nullable: true },
-                    isChannel: { type: 'boolean', example: false },
-                    botLink: { type: 'string', example: 'https://t.me/example_bot', nullable: true },
-                    status: {
-                        type: 'string',
-                        enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'],
-                        example: 'PENDING'
-                    },
-                    isActive: { type: 'boolean', example: false },
-                    postContent: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
-                    postButtons: { type: 'object', example: '[{"text":"Перейти","url":"https://example.com"}]' },
-                    postMedia: { type: 'string', example: 'uploads/media-123456789.jpg', nullable: true },
-                    postMediaType: { type: 'string', example: 'photo', nullable: true },
-                    createdAt: { type: 'string', format: 'date-time' },
-                    updatedAt: { type: 'string', format: 'date-time' },
-                    user: {
-                        type: 'object',
-                        properties: {
-                            id: { type: 'number' },
-                            telegramId: { type: 'string' },
-                            username: { type: 'string', nullable: true },
-                            firstName: { type: 'string', nullable: true },
-                            lastName: { type: 'string', nullable: true }
-                        }
-                    },
-                    _count: {
-                        type: 'object',
-                        properties: {
-                            MailingTargetBots: { type: 'number' },
-                            mailingReservations: { type: 'number' }
-                        }
-                    }
-                }
-            }
-        }
-    })
-    @ApiResponse({ status: 500, description: 'Внутренняя ошибка сервера.' })
-    async getAllMailings() {
-        return await this.mailingService.getAllMailings();
-    }
-
-    @Get('/date')
-    @ApiOperation({ summary: 'Получить все рассылки на определенную дату' })
-    @ApiResponse({
-        status: 200,
-        description: 'Список рассылок на определенную дату.',
-        schema: {
-            type: 'array',
-            items: {
-                type: 'object',
-                properties: {
-                    id: { type: 'number', example: 1 },
-                    userId: { type: 'number', example: 1 },
-                    botToken: { type: 'string', example: '1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ', nullable: true },
-                    channelId: { type: 'string', example: '-1001234567890', nullable: true },
-                    isChannel: { type: 'boolean', example: false },
-                    botLink: { type: 'string', example: 'https://t.me/example_bot', nullable: true },
-                    status: { type: 'string', enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'], example: 'PENDING' },
-                    isActive: { type: 'boolean', example: false },
-                    postContent: { type: 'string', example: 'Привет! Это тестовая рассылка.' },
-                    postButtons: { type: 'object', example: '[{"text":"Перейти","url":"https://example.com"}]' },
-                    postMedia: { type: 'string', example: 'uploads/media-123456789.jpg', nullable: true },
-                    postMediaType: { type: 'string', example: 'photo', nullable: true }
-                }
-            }
-        }
-    })
-    @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
-    async getMailingsByDate(@Query('date') date: string, @Query('sellerId') sellerId: string) {
-        // Validate sellerId
-        if (!sellerId) {
-            throw new HttpException('Seller ID is required', HttpStatus.BAD_REQUEST);
-        }
-        // Validate date format (YYYY-MM-DD)
-        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-        if (!dateRegex.test(date)) {
-            throw new HttpException('Invalid date format. Use YYYY-MM-DD.', HttpStatus.BAD_REQUEST);
-        }
-        // Parse date to Date object
-        const parsedDate = new Date(date);
-        if (isNaN(parsedDate.getTime())) {
-            throw new HttpException('Invalid date.', HttpStatus.BAD_REQUEST);
-        }
-
-        return await this.reservationService.getMailingsByDate(parsedDate, sellerId);
-    }
-
-    @Get('/targetBots/:id')
-    async getMailingTargetBots(@Param('id') id: string) {
-        const mailingId = parseInt(id, 10);
-
-        if (isNaN(mailingId)) {
-            throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
-        }
-
-        return await this.mailingService.getMailingTargetBots(mailingId);
-    }
-
-    @Get('reservations/:id/can-cancel')
-    @ApiOperation({
-        summary: 'Проверить возможность отмены резервирования',
-        description: 'Проверяет, можно ли отменить резервирование и показывает предварительный расчет возврата средств.'
-    })
-    @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
-    @ApiResponse({
-        status: 200,
-        description: 'Информация о возможности отмены резервирования.',
-        schema: {
+              id: { type: 'number' },
+              telegramId: { type: 'string' },
+              username: { type: 'string', nullable: true },
+              firstName: { type: 'string', nullable: true },
+              lastName: { type: 'string', nullable: true },
+            },
+          },
+          _count: {
             type: 'object',
             properties: {
-                canCancel: { type: 'boolean', description: 'Можно ли отменить резервирование' },
-                reason: { type: 'string', description: 'Причина, если нельзя отменить' },
-                hoursUntilReservation: { type: 'number', description: 'Часов до даты резервирования' },
-                refundPreview: {
-                    type: 'object',
-                    properties: {
-                        totalHeldAmount: { type: 'number', description: 'Общая удержанная сумма' },
-                        buyerRefundAmount: { type: 'number', description: 'Возврат покупателю (70%)' },
-                        sellerCompensationAmount: { type: 'number', description: 'Компенсация продавцу (25%)' },
-                        cancellationFee: { type: 'number', description: 'Комиссия за отмену (5%)' }
-                    }
-                }
-            }
-        }
-    })
-    async canCancelReservation(@Param('id') id: string) {
-        const reservationId = parseInt(id, 10);
+              MailingTargetBots: { type: 'number' },
+              mailingReservations: { type: 'number' },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 500, description: 'Внутренняя ошибка сервера.' })
+  async getAllMailings() {
+    return await this.mailingService.getAllMailings();
+  }
 
-        if (isNaN(reservationId)) {
-            throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
-        }
-
-        return await this.reservationService.canCancelReservation(reservationId);
+  @Owns('bot', 'sellerId', 'query')
+  @Get('/date')
+  @ApiOperation({ summary: 'Получить все рассылки на определенную дату' })
+  @ApiResponse({
+    status: 200,
+    description: 'Список рассылок на определенную дату.',
+    schema: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'number', example: 1 },
+          userId: { type: 'number', example: 1 },
+          channelId: {
+            type: 'string',
+            example: '-1001234567890',
+            nullable: true,
+          },
+          isChannel: { type: 'boolean', example: false },
+          botLink: {
+            type: 'string',
+            example: 'https://t.me/example_bot',
+            nullable: true,
+          },
+          status: {
+            type: 'string',
+            enum: ['PENDING', 'APPROVED', 'REJECTED', 'WAITING', 'COMPLETED'],
+            example: 'PENDING',
+          },
+          isActive: { type: 'boolean', example: false },
+          postContent: {
+            type: 'string',
+            example: 'Привет! Это тестовая рассылка.',
+          },
+          postButtons: {
+            type: 'object',
+            example: '[{"text":"Перейти","url":"https://example.com"}]',
+          },
+          postMedia: {
+            type: 'string',
+            example: 'uploads/media-123456789.jpg',
+            nullable: true,
+          },
+          postMediaType: { type: 'string', example: 'photo', nullable: true },
+        },
+      },
+    },
+  })
+  @ApiResponse({ status: 404, description: 'Рассылка не найдена.' })
+  async getMailingsByDate(
+    @Query('date') date: string,
+    @Query('sellerId') sellerId: string,
+  ) {
+    // Validate sellerId
+    if (!sellerId) {
+      throw new HttpException('Seller ID is required', HttpStatus.BAD_REQUEST);
     }
+    // Validate date format (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(date)) {
+      throw new HttpException(
+        'Invalid date format. Use YYYY-MM-DD.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    // Parse date to Date object
+    const parsedDate = new Date(date);
+    if (isNaN(parsedDate.getTime())) {
+      throw new HttpException('Invalid date.', HttpStatus.BAD_REQUEST);
+    }
+
+    return await this.reservationService.getMailingsByDate(
+      parsedDate,
+      sellerId,
+    );
+  }
+
+  @Owns('mailing', 'id')
+  @Get('/targetBots/:id')
+  async getMailingTargetBots(@Param('id') id: string) {
+    const mailingId = parseInt(id, 10);
+
+    if (isNaN(mailingId)) {
+      throw new HttpException('Invalid mailing ID', HttpStatus.BAD_REQUEST);
+    }
+
+    return await this.mailingService.getMailingTargetBots(mailingId);
+  }
+
+  @Owns('reservation', 'id')
+  @Get('reservations/:id/can-cancel')
+  @ApiOperation({
+    summary: 'Проверить возможность отмены резервирования',
+    description:
+      'Проверяет, можно ли отменить резервирование и показывает предварительный расчет возврата средств.',
+  })
+  @ApiParam({ name: 'id', description: 'ID резервирования рассылки' })
+  @ApiResponse({
+    status: 200,
+    description: 'Информация о возможности отмены резервирования.',
+    schema: {
+      type: 'object',
+      properties: {
+        canCancel: {
+          type: 'boolean',
+          description: 'Можно ли отменить резервирование',
+        },
+        reason: {
+          type: 'string',
+          description: 'Причина, если нельзя отменить',
+        },
+        hoursUntilReservation: {
+          type: 'number',
+          description: 'Часов до даты резервирования',
+        },
+        refundPreview: {
+          type: 'object',
+          properties: {
+            totalHeldAmount: {
+              type: 'number',
+              description: 'Общая удержанная сумма',
+            },
+            buyerRefundAmount: {
+              type: 'number',
+              description: 'Возврат покупателю (70%)',
+            },
+            sellerCompensationAmount: {
+              type: 'number',
+              description: 'Компенсация продавцу (25%)',
+            },
+            cancellationFee: {
+              type: 'number',
+              description: 'Комиссия за отмену (5%)',
+            },
+          },
+        },
+      },
+    },
+  })
+  async canCancelReservation(@Param('id') id: string) {
+    const reservationId = parseInt(id, 10);
+
+    if (isNaN(reservationId)) {
+      throw new HttpException('Invalid reservation ID', HttpStatus.BAD_REQUEST);
+    }
+
+    return await this.reservationService.canCancelReservation(reservationId);
+  }
 }

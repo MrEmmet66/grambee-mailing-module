@@ -1,20 +1,26 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsDate, IsIn, IsInt, Min } from 'class-validator';
 
 export enum MailingFilters {
-    PREMIUM = 'premium',
-    RU = 'ru',
-    ENG = 'eng',
-    CIS = 'cis'
+  PREMIUM = 'premium', RU = 'ru', ENG = 'eng', CIS = 'cis',
 }
 
+export class CreateMailingReservationDto {
+  @IsInt()
+  @Min(1)
+  mailingId: number;
 
-export type CreateMailingReservationDto = {
+  @IsInt()
+  @Min(1)
+  sellerId: number;
 
-    mailingId: number;
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(31)
+  @Type(() => Date)
+  @IsDate({ each: true })
+  dates: Date[];
 
-    sellerId: number;
-
-    dates: Date[];
-
-    paymentType: string;
+  @IsIn(['fixed', 'per_subscriber'])
+  paymentType: string;
 }

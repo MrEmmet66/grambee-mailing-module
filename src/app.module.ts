@@ -1,20 +1,21 @@
+import { PrismaModule } from '../prisma/prisma.module';
+import { PUBLIC_UPLOAD_OPTIONS } from './config/public-uploads';
+import { validateEnvironment } from './config/validate-environment';
 import { CommissionsModule } from './modules/commissions/commissions.module';
 import { HealthController } from './modules/health.controller';
-import { MailingCheckoutService } from './modules/mailing/services/mailingcheckout.service';
-import { PrismaModule } from 'prisma/prisma.module';
 
-import { MailingModule } from './modules/mailing/mailing.module';
-import { Module } from '@nestjs/common';
 import { HttpModule } from '@nestjs/axios';
-import { TelegramModule } from './modules/telegram/telegram.module';
+import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { BotSellersModule } from './modules/bot_sellers/bot-sellers.module';
-import { UsersModule } from './modules/users';
-import { ServeStaticModule } from '@nestjs/serve-static';
 import { ScheduleModule } from '@nestjs/schedule';
-import { BalanceModule } from './modules/balance/balance.module';
-import { StatsModule } from './modules/mailing/stats/stats.module';
+import { ServeStaticModule } from '@nestjs/serve-static';
 import { AuthModule } from './modules/auth/auth.module';
+import { BalanceModule } from './modules/balance/balance.module';
+import { BotSellersModule } from './modules/bot_sellers/bot-sellers.module';
+import { MailingModule } from './modules/mailing/mailing.module';
+import { StatsModule } from './modules/mailing/stats/stats.module';
+import { TelegramModule } from './modules/telegram/telegram.module';
+import { UsersModule } from './modules/users/users.module';
 
 @Module({
   imports: [
@@ -23,9 +24,11 @@ import { AuthModule } from './modules/auth/auth.module';
     ServeStaticModule.forRoot({
       rootPath: `${process.cwd()}/uploads`,
       serveRoot: '/api/v1/uploads',
+      serveStaticOptions: PUBLIC_UPLOAD_OPTIONS,
     }),
     ConfigModule.forRoot({
-      isGlobal: true
+      isGlobal: true,
+      validate: validateEnvironment,
     }),
     PrismaModule,
     MailingModule,
@@ -39,12 +42,9 @@ import { AuthModule } from './modules/auth/auth.module';
     TelegramModule,
     BotSellersModule,
     StatsModule,
-    AuthModule
+    AuthModule,
   ],
-  controllers: [
-    HealthController,
-  ],
-  providers: [
-  ],
+  controllers: [HealthController],
+  providers: [],
 })
-export class AppModule { }
+export class AppModule {}

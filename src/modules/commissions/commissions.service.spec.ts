@@ -1,4 +1,4 @@
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../prisma/prisma.service';
 import { CommissionsService } from './commissions.service';
 
 function serviceWithAggregate(aggregate: jest.Mock): CommissionsService {

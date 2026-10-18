@@ -229,41 +229,14 @@ func (h *MailingHandler) GetAllMailingMetrics(c *gin.Context) {
 
 // loadUsersFromFile загружает пользователей из файла
 func loadUsersFromFile(fileURL string) ([]models.User, error) {
-	// Проверяем, является ли это локальным файлом или URL
-	var file *os.File
-
-	if strings.HasPrefix(fileURL, "http://") || strings.HasPrefix(fileURL, "https://") {
-		// Скачиваем файл, если это абсолютный URL
-		localPath, err := utils.DownloadFile(fileURL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to download file: %w", err)
-		}
-		defer os.Remove(localPath)
-		file, err = os.Open(localPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open downloaded file: %w", err)
-		}
-	} else {
-		// Формируем абсолютный URL для относительного пути
-		mainServiceURL := os.Getenv("MAIN_SERVICE_URL")
-		if mainServiceURL == "" {
-			mainServiceURL = "http://localhost:3000"
-		}
-		// Удаляем завершающий слэш у mainServiceURL
-		mainServiceURL = strings.TrimRight(mainServiceURL, "/")
-		// Удаляем начальный слэш у fileURL
-		relPath := strings.TrimLeft(fileURL, "/")
-		fullURL := mainServiceURL + "/" + relPath
-		logrus.WithField("full_url", fullURL).Info("Converting relative path to full URL")
-		localPath, err := utils.DownloadFile(fullURL)
-		if err != nil {
-			return nil, fmt.Errorf("failed to download file from %s: %w", fullURL, err)
-		}
-		defer os.Remove(localPath)
-		file, err = os.Open(localPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to open downloaded file: %w", err)
-		}
+	localPath, err := utils.DownloadAudience(fileURL)
+	if err != nil {
+		return nil, err
+	}
+	defer os.Remove(localPath)
+	file, err := os.Open(localPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open audience file: %w", err)
 	}
 	defer file.Close()
 

@@ -1,6 +1,17 @@
-import { Injectable, BadRequestException, forwardRef, Inject, Logger } from '@nestjs/common';
-import { CreateBotSellerDto, CreateBotSellerFormData, UpdateBotSellerDto } from './dto';
-import { PrismaService } from 'prisma/prisma.service';
+import { PUBLIC_USER_SELECT } from '../users/public-user';
+import {
+  Injectable,
+  BadRequestException,
+  forwardRef,
+  Inject,
+  Logger,
+} from '@nestjs/common';
+import {
+  CreateBotSellerDto,
+  CreateBotSellerFormData,
+  UpdateBotSellerDto,
+} from './dto';
+import { PrismaService } from '../../../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -20,10 +31,10 @@ export class BotSellersService {
 
   constructor(
     private prisma: PrismaService,
-    @Inject(forwardRef(() => ApplicationsService))
+    @Inject(forwardRef(() => ApplicationSendersService))
     private telegramService: ApplicationSendersService,
     private configService: ConfigService,
-    private readonly avatarService: AvatarService
+    private readonly avatarService: AvatarService,
   ) {
     const botUsersDir = path.join(process.cwd(), 'uploads', 'bot_users');
     if (!fs.existsSync(botUsersDir)) {
@@ -44,7 +55,6 @@ export class BotSellersService {
       throw new BadRequestException(`Bot seller with id ${botId} not found`);
     }
 
-
     return this.prisma.botSeller.update({
       where: { id: botId },
       data: { isIncludedInReferrals: !botSeller.isIncludedInReferrals },
@@ -54,21 +64,27 @@ export class BotSellersService {
   async getBotSellerOwnerTelegramId(botSellerId: number): Promise<string> {
     const botSeller = await this.prisma.botSeller.findUnique({
       where: { id: botSellerId },
-      select: { user: { select: { telegramId: true } } }
+      select: { user: { select: { telegramId: true } } },
     });
 
     if (!botSeller || !botSeller.user) {
-      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+      throw new BadRequestException(
+        `Bot seller with id ${botSellerId} not found`,
+      );
     }
 
     return botSeller.user.telegramId;
   }
 
-  private async getChannelDataByLink(link: string): Promise<{ title: string; channelId: string; }> {
+  private async getChannelDataByLink(
+    link: string,
+  ): Promise<{ title: string; channelId: string }> {
     const botToken = this.configService.get<string>('MAIN_BOT', '');
     // Определяем тип ссылки: приватная (invite) или публичная (username)
     // Приватные обычно начинаются с https://t.me/joinchat или https://t.me/+ или имеют invite code
-    const isPrivate = /^https:\/\/t\.me\/(joinchat|\+|invite)/.test(link) || /\b(joinchat|invite|\+)/.test(link);
+    const isPrivate =
+      /^https:\/\/t\.me\/(joinchat|\+|invite)/.test(link) ||
+      /\b(joinchat|invite|\+)/.test(link);
     if (isPrivate) {
       // Приватный канал — используем userbot API
       return await this.getPrivateChannelDataByLink(link);
@@ -84,51 +100,82 @@ export class BotSellersService {
       // Удаляем все после ? (например, параметры)
       username = username.split('?')[0];
       if (!username) {
-        throw new BadRequestException('Не удалось извлечь username из публичной ссылки');
+        throw new BadRequestException(
+          'Не удалось извлечь username из публичной ссылки',
+        );
       }
       try {
         this.logger.log(`Fetching channel info for username: ${username}`);
-        const response = await axios.get(`https://api.telegram.org/bot${botToken}/getChat?chat_id=@${username}`);
+        const response = await axios.get(
+          `https://api.telegram.org/bot${botToken}/getChat?chat_id=@${username}`,
+        );
         if (response.data && response.data.ok && response.data.result) {
-          this.logger.log(`Telegram API response for getChat: ${JSON.stringify(response.data)}`);
+          this.logger.log(
+            `Telegram API response for getChat: ${JSON.stringify(response.data)}`,
+          );
 
           return {
-            title: response.data.result.title || response.data.result.username || username,
+            title:
+              response.data.result.title ||
+              response.data.result.username ||
+              username,
             channelId: String(response.data.result.id),
           };
         } else {
-          this.logger.warn(`Telegram API returned unexpected data: ${JSON.stringify(response.data)}`);
-          throw new BadRequestException('Telegram API не вернул корректную информацию о канале');
+          this.logger.warn(
+            `Telegram API returned unexpected data: ${JSON.stringify(response.data)}`,
+          );
+          throw new BadRequestException(
+            'Telegram API не вернул корректную информацию о канале',
+          );
         }
       } catch (error: any) {
         this.logger.error(`Telegram API error: ${error.message}`);
-        throw new BadRequestException('Не удалось получить данные о канале: ' + (error.response?.data?.description || error.message));
+        throw new BadRequestException(
+          'Не удалось получить данные о канале: ' +
+            (error.response?.data?.description || error.message),
+        );
       }
     }
   }
 
-  private async getPrivateChannelDataByLink(link: string): Promise<{ title: string; channelId: string; }> {
+  private async getPrivateChannelDataByLink(
+    link: string,
+  ): Promise<{ title: string; channelId: string }> {
     const userBotUrl = this.configService.get<string>('USERBOT_URL');
     if (!userBotUrl) {
       throw new BadRequestException('USERBOT_URL is not configured');
     }
     try {
       // Формируем endpoint (например, /getChannelInfo)
-      const endpoint = userBotUrl.endsWith('/') ? userBotUrl + 'getChannelInfo' : userBotUrl + '/getChannelInfo';
-      this.logger.debug(`Requesting userbot API: ${endpoint} with link: ${link}`);
-      const response = await axios.post(endpoint, { inviteLink: link }, { timeout: 10000 });
+      const endpoint = userBotUrl.endsWith('/')
+        ? userBotUrl + 'getChannelInfo'
+        : userBotUrl + '/getChannelInfo';
+      this.logger.debug(
+        `Requesting userbot API: ${endpoint} with link: ${link}`,
+      );
+      const response = await axios.post(
+        endpoint,
+        { inviteLink: link },
+        { timeout: 10000 },
+      );
       if (response.data && response.data.channelId && response.data.title) {
         return {
           title: response.data.title,
           channelId: response.data.channelId,
         };
       } else {
-        this.logger.warn(`Userbot API returned unexpected data: ${JSON.stringify(response.data)}`);
+        this.logger.warn(
+          `Userbot API returned unexpected data: ${JSON.stringify(response.data)}`,
+        );
         throw new BadRequestException('Не удалось получить данные о канале');
       }
     } catch (error: any) {
       this.logger.error(`Userbot API error: ${error.message}`);
-      throw new BadRequestException('Не удалось получить данные о канале: ' + (error.response?.data?.error || error.message));
+      throw new BadRequestException(
+        'Не удалось получить данные о канале: ' +
+          (error.response?.data?.error || error.message),
+      );
     }
   }
 
@@ -145,8 +192,8 @@ export class BotSellersService {
         MailingTargetBots: {
           where: {
             mailingId: mailingId,
-          }
-        }
+          },
+        },
       },
     });
   }
@@ -156,14 +203,18 @@ export class BotSellersService {
     return botTokenRegex.test(token);
   }
 
-  async getBotSellerOwner(botSellerId): Promise<User> {
+  async getBotSellerOwner(
+    botSellerId,
+  ): Promise<Pick<User, 'id' | 'telegramId' | 'username' | 'createdAt'>> {
     const botSeller = await this.prisma.botSeller.findUnique({
       where: { id: botSellerId },
-      include: { user: true }
+      include: { user: { select: PUBLIC_USER_SELECT } },
     });
 
     if (!botSeller || !botSeller.user) {
-      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+      throw new BadRequestException(
+        `Bot seller with id ${botSellerId} not found`,
+      );
     }
 
     return botSeller.user;
@@ -174,7 +225,7 @@ export class BotSellersService {
       const fileStream = fs.createReadStream(filePath);
       const rl = readline.createInterface({
         input: fileStream,
-        crlfDelay: Infinity
+        crlfDelay: Infinity,
       });
 
       let lineNumber = 0;
@@ -194,7 +245,11 @@ export class BotSellersService {
             if (telegramId.length < 6 || telegramId.length > 12) {
               isValid = false;
               rl.close();
-              reject(new BadRequestException(`Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 6-12 digits.`));
+              reject(
+                new BadRequestException(
+                  `Invalid Telegram ID length at line ${lineNumber}: "${telegramId}". ID should be 6-12 digits.`,
+                ),
+              );
               return;
             }
             userCount++;
@@ -205,17 +260,28 @@ export class BotSellersService {
       rl.on('close', () => {
         if (isValid) {
           resolve(userCount);
-          this.logger.log(`Statistics file processed: ${filePath}, total users: ${userCount}`);
+          this.logger.log(
+            `Statistics file processed: ${filePath}, total users: ${userCount}`,
+          );
         }
       });
 
       fileStream.on('error', (err) => {
-        reject(new BadRequestException(`Error reading statistics file: ${err.message}`));
+        reject(
+          new BadRequestException(
+            `Error reading statistics file: ${err.message}`,
+          ),
+        );
       });
     });
   }
 
-  async findAllPaged(page: number, limit: number, search: string, categoriesJson?: string) {
+  async findAllPaged(
+    page: number,
+    limit: number,
+    search: string,
+    categoriesJson?: string,
+  ) {
     const skip = (page - 1) * limit;
     const take = limit;
     const categories = categoriesJson ? JSON.parse(categoriesJson) : null;
@@ -233,7 +299,6 @@ export class BotSellersService {
         OR: [
           { link: { contains: search, mode: 'insensitive' } },
           { category: { in: categories || [] } },
-
         ],
       };
     }
@@ -246,7 +311,7 @@ export class BotSellersService {
     const items = await this.prisma.botSeller.findMany({
       where,
       include: {
-        user: true,
+        user: { select: PUBLIC_USER_SELECT },
       },
       skip,
       take,
@@ -263,11 +328,13 @@ export class BotSellersService {
 
   private async calculateMAU(botToken: string): Promise<number> {
     try {
-      this.logger.log(`[MAU] Starting MAU calculation for bot ${botToken.slice(0, 10)}...`);
+      this.logger.log(
+        `[MAU] Starting MAU calculation for bot ${botToken.slice(0, 10)}...`,
+      );
 
-      const thirtyDaysAgo = Math.floor(Date.now() / 1000) - (30 * 24 * 60 * 60);
+      const thirtyDaysAgo = Math.floor(Date.now() / 1000) - 30 * 24 * 60 * 60;
       const updatesResponse = await axios.get(
-        `https://api.telegram.org/bot${botToken}/getUpdates?offset=-1&limit=100&timeout=0`
+        `https://api.telegram.org/bot${botToken}/getUpdates?offset=-1&limit=100&timeout=0`,
       );
 
       if (updatesResponse.data && updatesResponse.data.ok) {
@@ -287,7 +354,9 @@ export class BotSellersService {
         }
 
         const mau = uniqueUsers.size;
-        this.logger.log(`[MAU] Calculated MAU: ${mau} unique users in the last 30 days`);
+        this.logger.log(
+          `[MAU] Calculated MAU: ${mau} unique users in the last 30 days`,
+        );
         return mau;
       }
 
@@ -301,7 +370,7 @@ export class BotSellersService {
 
   private async validateUser(userId: number): Promise<void> {
     const userExists = await this.prisma.user.findUnique({
-      where: { id: userId }
+      where: { id: userId },
     });
 
     if (!userExists) {
@@ -311,17 +380,22 @@ export class BotSellersService {
 
   private async getUserByTelegramId(telegramId: string): Promise<number> {
     const user = await this.prisma.user.findUnique({
-      where: { telegramId }
+      where: { telegramId },
     });
 
     if (!user) {
-      throw new BadRequestException(`User with Telegram ID ${telegramId} not found`);
+      throw new BadRequestException(
+        `User with Telegram ID ${telegramId} not found`,
+      );
     }
 
     return user.id;
   }
 
-  private async validateChannelAccess(botToken: string, channelId: string): Promise<void> {
+  private async validateChannelAccess(
+    botToken: string,
+    channelId: string,
+  ): Promise<void> {
     try {
       // Skip validation completely if channelId is null or undefined
       if (!channelId) {
@@ -329,57 +403,75 @@ export class BotSellersService {
       }
 
       const channelInfoResponse = await axios.get(
-        `https://api.telegram.org/bot${botToken}/getChat?chat_id=${channelId}`
+        `https://api.telegram.org/bot${botToken}/getChat?chat_id=${channelId}`,
       );
 
       if (channelInfoResponse.data && channelInfoResponse.data.ok) {
         this.logger.log('Channel Information:');
-        this.logger.log(JSON.stringify(channelInfoResponse.data.result, null, 2));
+        this.logger.log(
+          JSON.stringify(channelInfoResponse.data.result, null, 2),
+        );
         if (channelInfoResponse.data.result.has_protected_content === true) {
-          throw new BadRequestException('В канале отключена пересылка сообщений. Пожалуйста, отключите эту опцию чтобы пользоваться сервисом.');
+          throw new BadRequestException(
+            'В канале отключена пересылка сообщений. Пожалуйста, отключите эту опцию чтобы пользоваться сервисом.',
+          );
         }
-
 
         await this.validateBotAdminRights(botToken, channelId);
       } else {
-        throw new BadRequestException('Invalid channel ID or bot does not have access to the channel');
+        throw new BadRequestException(
+          'Invalid channel ID or bot does not have access to the channel',
+        );
       }
     } catch (error) {
       if (error.response && error.response.status === 400) {
-        throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+        throw new BadRequestException(
+          'The bot is not an administrator in the specified channel. Please make the bot an administrator first.',
+        );
       }
-      throw new BadRequestException('Failed to verify channel ID: ' + error.message);
+      throw new BadRequestException(
+        'Failed to verify channel ID: ' + error.message,
+      );
     }
   }
 
-
-
-  private async validateBotAdminRights(botToken: string, channelId: string): Promise<void> {
+  private async validateBotAdminRights(
+    botToken: string,
+    channelId: string,
+  ): Promise<void> {
     try {
       const adminResponse = await axios.get(
-        `https://api.telegram.org/bot${botToken}/getChatAdministrators?chat_id=${channelId}`
+        `https://api.telegram.org/bot${botToken}/getChatAdministrators?chat_id=${channelId}`,
       );
 
       if (adminResponse.data && adminResponse.data.ok) {
         const administrators = adminResponse.data.result;
         const botInfo = await axios.get(
-          `https://api.telegram.org/bot${botToken}/getMe`
+          `https://api.telegram.org/bot${botToken}/getMe`,
         );
 
         if (botInfo.data && botInfo.data.ok) {
           const botId = botInfo.data.result.id;
-          const isAdmin = administrators.some(admin => admin.user.id === botId);
+          const isAdmin = administrators.some(
+            (admin) => admin.user.id === botId,
+          );
 
           if (!isAdmin) {
-            throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+            throw new BadRequestException(
+              'The bot is not an administrator in the specified channel. Please make the bot an administrator first.',
+            );
           }
         }
       } else {
-        throw new BadRequestException('Failed to get channel administrators information');
+        throw new BadRequestException(
+          'Failed to get channel administrators information',
+        );
       }
     } catch (error) {
       if (error.response && error.response.status === 403) {
-        throw new BadRequestException('The bot is not an administrator in the specified channel. Please make the bot an administrator first.');
+        throw new BadRequestException(
+          'The bot is not an administrator in the specified channel. Please make the bot an administrator first.',
+        );
       }
       throw error;
     }
@@ -388,7 +480,7 @@ export class BotSellersService {
   private async getBotInfo(botToken: string): Promise<any> {
     try {
       const botInfoResponse = await axios.get(
-        `https://api.telegram.org/bot${botToken}/getMe`
+        `https://api.telegram.org/bot${botToken}/getMe`,
       );
 
       if (botInfoResponse.data && botInfoResponse.data.ok) {
@@ -396,20 +488,32 @@ export class BotSellersService {
         this.logger.log(JSON.stringify(botInfoResponse.data.result, null, 2));
         return botInfoResponse.data.result;
       } else {
-        this.logger.warn('Failed to get basic bot information from Telegram API');
+        this.logger.warn(
+          'Failed to get basic bot information from Telegram API',
+        );
       }
     } catch (error) {
       this.logger.error(`Error getting bot information: ${error.message}`);
     }
   }
 
-  private async handleStatisticsFile(statisticsFile?: Express.Multer.File): Promise<{ path: string, userCount: number } | null> {
+  private async handleStatisticsFile(
+    statisticsFile?: Express.Multer.File,
+  ): Promise<{ path: string; userCount: number } | null> {
     if (!statisticsFile) return null;
 
-    const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
+    const filePath = path.join(
+      process.cwd(),
+      'uploads',
+      'bot_users',
+      statisticsFile.filename,
+    );
     try {
       const userCount = await this.validateStatisticsFile(filePath);
-      return { path: `/uploads/bot_users/${statisticsFile.filename}`, userCount };
+      return {
+        path: `/uploads/bot_users/${statisticsFile.filename}`,
+        userCount,
+      };
     } catch (error) {
       try {
         fs.unlinkSync(filePath);
@@ -420,18 +524,26 @@ export class BotSellersService {
     }
   }
 
-  async create(createBotSellerDto: CreateBotSellerFormData, statisticsFile?: Express.Multer.File) {
+  async create(
+    createBotSellerDto: CreateBotSellerFormData,
+    statisticsFile?: Express.Multer.File,
+  ) {
     let userId: number = 0;
 
     // Debug log to see the incoming DTO
-    this.logger.debug(`Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`);
-    this.logger.debug(`isChannel type: ${typeof createBotSellerDto.isChannel}, value: ${createBotSellerDto.isChannel}`);
+    this.logger.debug(
+      `Creating bot seller with DTO: ${JSON.stringify(createBotSellerDto)}`,
+    );
+    this.logger.debug(
+      `isChannel type: ${typeof createBotSellerDto.isChannel}, value: ${createBotSellerDto.isChannel}`,
+    );
 
     const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
 
-
     if (createBotSellerDto.userId) {
-      userId = await this.getUserByTelegramId(String(createBotSellerDto.userId));
+      userId = await this.getUserByTelegramId(
+        String(createBotSellerDto.userId),
+      );
     }
 
     // проверяем botToken только если isChannel = false
@@ -439,52 +551,70 @@ export class BotSellersService {
     const existingBot = await this.prisma.botSeller.findFirst({
       where: {
         OR: [
-
           // ✅ Проверяем botToken только если он действительно передан и isChannel = false
-          ...(createBotSellerDto.isChannel === false && createBotSellerDto.botToken ? [{ botToken: createBotSellerDto.botToken }] : []),
+          ...(createBotSellerDto.isChannel === false &&
+          createBotSellerDto.botToken
+            ? [{ botToken: createBotSellerDto.botToken }]
+            : []),
           // ✅ Проверяем link только если он действительно передан и isChannel = true
-          ...(createBotSellerDto.isChannel === true && createBotSellerDto.link ? [{
-            link: createBotSellerDto.link,
-            isChannel: true
-          }] : [])
-        ]
-      }
+          ...(createBotSellerDto.isChannel === true && createBotSellerDto.link
+            ? [
+                {
+                  link: createBotSellerDto.link,
+                  isChannel: true,
+                },
+              ]
+            : []),
+        ],
+      },
     });
 
-    console.log(existingBot);
-
-
     if (existingBot) {
-      throw new BadRequestException('A bot with this token or channel link already exists');
+      throw new BadRequestException(
+        'A bot with this token or channel link already exists',
+      );
     }
 
     const isChannel = createBotSellerDto.isChannel === true;
     let avatarUrl: string | null = null;
     let channelData: { title: string; channelId: string } | null = null;
     let botInfo: any = null;
-    let statistics: { path: string, userCount: number } | null = null;
+    let statistics: { path: string; userCount: number } | null = null;
 
     // Validate input and fill required fields
     if (isChannel) {
       if (!createBotSellerDto.link) {
-        throw new BadRequestException('Channel link is required when isChannel is true');
+        throw new BadRequestException(
+          'Channel link is required when isChannel is true',
+        );
       }
       channelData = await this.getChannelDataByLink(createBotSellerDto.link);
       const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
       await this.validateChannelAccess(mainBotToken, channelData?.channelId);
-      avatarUrl = await this.avatarService.getChannelAvatarUrl(mainBotToken, channelData.channelId);
+      avatarUrl = await this.avatarService.getChannelAvatarUrl(
+        mainBotToken,
+        channelData.channelId,
+      );
       // Statistics for channel not handled here
     } else {
       if (!createBotSellerDto.botToken) {
-        throw new BadRequestException('Bot token is required when isChannel is false');
+        throw new BadRequestException(
+          'Bot token is required when isChannel is false',
+        );
       }
       if (!this.validateBotToken(createBotSellerDto.botToken)) {
-        throw new BadRequestException('Invalid bot token format. Token should match the Telegram bot token format.');
+        throw new BadRequestException(
+          'Invalid bot token format. Token should match the Telegram bot token format.',
+        );
       }
       botInfo = await this.getBotInfo(createBotSellerDto.botToken);
-      avatarUrl = await this.avatarService.getBotAvatarUrl(createBotSellerDto.botToken);
+      avatarUrl = await this.avatarService.getBotAvatarUrl(
+        createBotSellerDto.botToken,
+      );
       statistics = await this.handleStatisticsFile(statisticsFile);
-      this.logger.log(`Statistics file processed: ${JSON.stringify(statistics)}`);
+      this.logger.log(
+        `Statistics file processed: ${JSON.stringify(statistics)}`,
+      );
     }
 
     // Create a new object with all properties from the DTO, excluding unwanted fields
@@ -493,7 +623,11 @@ export class BotSellersService {
       userId,
       acceptStatus: 'PENDING',
       botToken: !isChannel ? createBotSellerDto.botToken : null,
-      link: isChannel ? createBotSellerDto.link : (botInfo ? `https://t.me/${botInfo.username}` : null),
+      link: isChannel
+        ? createBotSellerDto.link
+        : botInfo
+          ? `https://t.me/${botInfo.username}`
+          : null,
       statisticsFilePath: statistics?.path || null,
       usersData: createBotSellerDto.usersData || {},
       totalBotAudience: statistics?.userCount || 0,
@@ -511,7 +645,9 @@ export class BotSellersService {
       delete botSellerData.statisticsFile;
     }
 
-    this.logger.debug(`Final bot seller data: ${JSON.stringify(botSellerData)}`);
+    this.logger.debug(
+      `Final bot seller data: ${JSON.stringify(botSellerData)}`,
+    );
 
     const botSeller = await this.prisma.botSeller.create({
       data: botSellerData as any,
@@ -520,63 +656,64 @@ export class BotSellersService {
     try {
       await this.telegramService.sendBotSellerApplication(botSeller);
     } catch (error) {
-      console.error('Failed to send bot seller application to Telegram:', error);
+      console.error(
+        'Failed to send bot seller application to Telegram:',
+        error,
+      );
     }
 
     return botSeller;
   }
 
-
-
   async findAll() {
     return this.prisma.botSeller.findMany({
       include: {
-        user: true,
+        user: { select: PUBLIC_USER_SELECT },
       },
     });
   }
 
   async getAllBotSellers() {
     const now = new Date();
-    
+
     // Получаем всех продавцов ботов с информацией о пользователях
     const botSellers = await this.prisma.botSeller.findMany({
       include: {
-        user: true,
+        user: { select: PUBLIC_USER_SELECT },
         mailingReservations: {
           where: {
-            date: { gt: now }
-          }
+            date: { gt: now },
+          },
         },
         _count: {
           select: {
             mailingReservations: {
-              where: { date: { gt: now } }
-            }
-          }
-        }
+              where: { date: { gt: now } },
+            },
+          },
+        },
       },
       orderBy: {
-        createdAt: 'desc'
-      }
+        createdAt: 'desc',
+      },
     });
 
     // Получаем общий заработок по всем рассылкам каждого продавца
     const earnings = await this.prisma.mailingReservation.groupBy({
       by: ['botSellerId'],
       _sum: {
-        paidAmount: true
-      }
+        paidAmount: true,
+      },
     });
 
     // Формируем результат с дополнительной информацией
-    return botSellers.map(seller => {
-      const earning = earnings.find(e => e.botSellerId === seller.id);
+    return botSellers.map((seller) => {
+      const earning = earnings.find((e) => e.botSellerId === seller.id);
       return {
         ...seller,
         totalEarnings: earning?._sum.paidAmount ?? 0,
         activeMailingsCount: seller._count.mailingReservations,
-        upcomingReservations: seller.mailingReservations
+        upcomingReservations: seller.mailingReservations,
       };
     });
   }
@@ -585,7 +722,7 @@ export class BotSellersService {
     return this.prisma.botSeller.findUnique({
       where: { id },
       include: {
-        user: true,
+        user: { select: PUBLIC_USER_SELECT },
         mailingReservations: true,
       },
     });
@@ -600,11 +737,14 @@ export class BotSellersService {
       throw new BadRequestException(`Ресурс не найден`);
     }
 
-    if (existingBotSeller.acceptStatus === 'REJECTED' || existingBotSeller.acceptStatus === 'PENDING') {
-      throw new BadRequestException('Вы не можете редактировать бота, пока он не будет одобрен.');
+    if (
+      existingBotSeller.acceptStatus === 'REJECTED' ||
+      existingBotSeller.acceptStatus === 'PENDING'
+    ) {
+      throw new BadRequestException(
+        'Вы не можете редактировать бота, пока он не будет одобрен.',
+      );
     }
-
-
 
     return this.prisma.botSeller.update({
       where: { id },
@@ -616,8 +756,8 @@ export class BotSellersService {
     const botSeller = await this.prisma.botSeller.findUnique({
       where: { id: botSellerId },
       include: {
-        user: true
-      }
+        user: { select: PUBLIC_USER_SELECT },
+      },
     });
 
     return botSeller?.user.telegramId === userId;
@@ -635,7 +775,9 @@ export class BotSellersService {
     });
 
     if (futureReservations.length > 0) {
-      throw new BadRequestException('У вашего бота забронированы рассылки, подождите, пока они закончатся.');
+      throw new BadRequestException(
+        'У вашего бота забронированы рассылки, подождите, пока они закончатся.',
+      );
     }
 
     // Удаляем все связи с MailingTargetBots
@@ -643,15 +785,10 @@ export class BotSellersService {
       where: { botSellerId: id },
     });
 
-
     // Удаляем все связи с MailingReservations
     await this.prisma.mailingReservation.deleteMany({
       where: { botSellerId: id },
     });
-
-
-
-
 
     return this.prisma.botSeller.delete({
       where: { id },
@@ -662,7 +799,7 @@ export class BotSellersService {
     // Сначала ищем пользователя по telegramId
     const user = await this.prisma.user.findUnique({
       where: { telegramId },
-      select: { id: true }
+      select: { id: true },
     });
 
     if (!user) {
@@ -673,17 +810,15 @@ export class BotSellersService {
     return this.prisma.botSeller.findMany({
       where: { userId: user.id },
       include: {
-        user: true,
+        user: { select: PUBLIC_USER_SELECT },
       },
     });
   }
 
-
-
   async findByTelegramId(telegramId: string) {
     const user = await this.prisma.user.findUnique({
       where: { telegramId },
-      select: { id: true }
+      select: { id: true },
     });
 
     if (!user) {
@@ -696,77 +831,92 @@ export class BotSellersService {
     const sellers = await this.prisma.botSeller.findMany({
       where: { userId: user.id },
       include: {
-        user: true,
+        user: { select: PUBLIC_USER_SELECT },
         _count: {
           select: {
             mailingReservations: {
-              where: { date: { gt: now } }
-            }
-          }
-        }
-      }
+              where: { date: { gt: now } },
+            },
+          },
+        },
+      },
     });
 
     // Группируем и считаем общий заработок по всем рассылкам каждого продавца
     const earnings = await this.prisma.mailingReservation.groupBy({
       by: ['botSellerId'],
       where: {
-        botSellerId: { in: sellers.map(s => s.id) }
+        botSellerId: { in: sellers.map((s) => s.id) },
       },
       _sum: {
-        paidAmount: true
-      }
+        paidAmount: true,
+      },
     });
 
     // Формируем результат
     const activeCounts = await this.prisma.mailingReservation.groupBy({
       by: ['botSellerId'],
       where: {
-        botSellerId: { in: sellers.map(s => s.id) },
+        botSellerId: { in: sellers.map((s) => s.id) },
         isProcessed: false,
         date: {
-          gt: now
-        }
+          gt: now,
+        },
       },
       _count: {
-        id: true
-      }
+        id: true,
+      },
     });
 
-    return sellers.map(seller => {
-      const earning = earnings.find(e => e.botSellerId === seller.id);
-      const active = activeCounts.find(a => a.botSellerId === seller.id);
+    return sellers.map((seller) => {
+      const earning = earnings.find((e) => e.botSellerId === seller.id);
+      const active = activeCounts.find((a) => a.botSellerId === seller.id);
       return {
         ...seller,
         mailingReservationsCount: seller._count.mailingReservations,
         totalEarnings: earning?._sum.paidAmount ?? 0,
-        activeMailingsCount: active?._count.id ?? 0
+        activeMailingsCount: active?._count.id ?? 0,
       };
     });
   }
 
-  async updateStatus(id: number, acceptStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WAITING') {
+  async updateStatus(
+    id: number,
+    acceptStatus: 'PENDING' | 'APPROVED' | 'REJECTED' | 'WAITING',
+  ) {
     return this.prisma.botSeller.update({
       where: { id },
       data: { acceptStatus },
     });
   }
 
-  async updateStatistics(id: number, statistics: {
-    botLiveAudience?: number;
-    botMonthlyActiveUsers?: number;
-    channelAudience?: number;
-    channelDaylyActiveUsers?: number;
-  }) {
+  async updateStatistics(
+    id: number,
+    statistics: {
+      botLiveAudience?: number;
+      botMonthlyActiveUsers?: number;
+      channelAudience?: number;
+      channelDaylyActiveUsers?: number;
+    },
+  ) {
     return this.prisma.botSeller.update({
       where: { id },
       data: statistics,
     });
   }
 
-
-
-  async updateCategory(id: number, category: 'GAMBLING' | 'OTHER' | 'DATING' | 'GAMES' | 'CRYPTO' | 'FUN' | 'TECH' | 'UTILITY') {
+  async updateCategory(
+    id: number,
+    category:
+      | 'GAMBLING'
+      | 'OTHER'
+      | 'DATING'
+      | 'GAMES'
+      | 'CRYPTO'
+      | 'FUN'
+      | 'TECH'
+      | 'UTILITY',
+  ) {
     return this.prisma.botSeller.update({
       where: { id },
       data: { category },
@@ -786,7 +936,9 @@ export class BotSellersService {
     });
 
     if (!botSeller) {
-      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+      throw new BadRequestException(
+        `Bot seller with id ${botSellerId} not found`,
+      );
     }
 
     // Проверяем, что день не заблокирован
@@ -798,9 +950,10 @@ export class BotSellersService {
     });
 
     if (existingLock) {
-      throw new BadRequestException(`День ${date.toISOString().split('T')[0]} уже заблокирован для этого бота`);
+      throw new BadRequestException(
+        `День ${date.toISOString().split('T')[0]} уже заблокирован для этого бота`,
+      );
     }
-    
 
     return this.prisma.lockedDays.create({
       data: {
@@ -817,7 +970,9 @@ export class BotSellersService {
     });
 
     if (!botSeller) {
-      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+      throw new BadRequestException(
+        `Bot seller with id ${botSellerId} not found`,
+      );
     }
 
     return this.prisma.lockedDays.findMany({
@@ -836,10 +991,12 @@ export class BotSellersService {
     // Проверяем, что бот-продавец существует
     const botSeller = await this.prisma.botSeller.findUnique({
       where: { id: botSellerId },
-    }); 
+    });
 
     if (!botSeller) {
-      throw new BadRequestException(`Bot seller with id ${botSellerId} not found`);
+      throw new BadRequestException(
+        `Bot seller with id ${botSellerId} not found`,
+      );
     }
 
     // Проверяем, что день заблокирован
@@ -849,9 +1006,11 @@ export class BotSellersService {
         botSellerId: botSellerId,
       },
     });
-    
+
     if (!existingLock) {
-      throw new BadRequestException(`День ${date.toISOString().split('T')[0]} не заблокирован для этого бота`);
+      throw new BadRequestException(
+        `День ${date.toISOString().split('T')[0]} не заблокирован для этого бота`,
+      );
     }
 
     // Удаляем блокировку дня
@@ -861,8 +1020,6 @@ export class BotSellersService {
       },
     });
   }
-
-
 
   async uploadStatistics(id: number, statisticsFile: Express.Multer.File) {
     const botSeller = await this.prisma.botSeller.findUnique({
@@ -874,19 +1031,30 @@ export class BotSellersService {
     }
 
     if (botSeller.isChannel === true) {
-      throw new BadRequestException('Вы не можете загружать статистику для каналов. Статистика доступна только для ботов.');
+      throw new BadRequestException(
+        'Вы не можете загружать статистику для каналов. Статистика доступна только для ботов.',
+      );
     }
 
-    const filePath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
+    const filePath = path.join(
+      process.cwd(),
+      'uploads',
+      'bot_users',
+      statisticsFile.filename,
+    );
     try {
       const statistics = await this.handleStatisticsFile(statisticsFile);
 
       if (
         botSeller.statisticsFilePath &&
-        botSeller.statisticsFilePath !== `/uploads/bot_users/${statisticsFile.filename}`
+        botSeller.statisticsFilePath !==
+          `/uploads/bot_users/${statisticsFile.filename}`
       ) {
         try {
-          const existingFilePath = path.join(process.cwd(), botSeller.statisticsFilePath.substring(1));
+          const existingFilePath = path.join(
+            process.cwd(),
+            botSeller.statisticsFilePath.substring(1),
+          );
           if (fs.existsSync(existingFilePath)) {
             fs.unlinkSync(existingFilePath);
           }
@@ -895,10 +1063,19 @@ export class BotSellersService {
         }
       }
 
-      const sanitizedToken = botSeller.botToken?.replace(/[^a-zA-Z0-9]/g, '_');
-      const newFileName = `${sanitizedToken}_statistics${path.extname(statisticsFile.filename)}`;
-      const oldPath = path.join(process.cwd(), 'uploads', 'bot_users', statisticsFile.filename);
-      const newPath = path.join(process.cwd(), 'uploads', 'bot_users', newFileName);
+      const newFileName = crypto.randomUUID() + '.txt';
+      const oldPath = path.join(
+        process.cwd(),
+        'uploads',
+        'bot_users',
+        statisticsFile.filename,
+      );
+      const newPath = path.join(
+        process.cwd(),
+        'uploads',
+        'bot_users',
+        newFileName,
+      );
 
       fs.renameSync(oldPath, newPath);
 
@@ -906,7 +1083,7 @@ export class BotSellersService {
         where: { id },
         data: {
           totalBotAudience: statistics?.userCount,
-          statisticsFilePath: `/uploads/bot_users/${newFileName}`
+          statisticsFilePath: `/uploads/bot_users/${newFileName}`,
         },
       });
 

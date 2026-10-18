@@ -1,486 +1,641 @@
+import { PUBLIC_USER_SELECT } from '../../users/public-user';
 import { Injectable, Logger, Inject, forwardRef } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../../prisma/prisma.service';
 import { ApplicationsService } from '../../telegram/applications.service';
 import { TelegramService } from '../../telegram/telegram.service';
 import { BalanceService } from '../../balance/balance.service';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { ReservationService } from './reservation.service';
-import { MailingNotifyProps } from 'src/modules/telegram/telegram.types';
+import { MailingNotifyProps } from '../../telegram/telegram.types';
 import * as fs from 'fs';
 import * as readline from 'readline';
-import { BotSeller, Mailing, MailingReservation, MailingTargetBots } from '@prisma/client';
-import { ApplicationSendersService } from 'src/modules/telegram/applications-sender.service';
+import {
+  BotSeller,
+  Mailing,
+  MailingReservation,
+  MailingTargetBots,
+} from '@prisma/client';
+import { ApplicationSendersService } from '../../telegram/applications-sender.service';
+import { MailingService } from './mailing.service';
 import { resolveTelegramTargets } from '../../telegram/telegram-targets';
 
 @Injectable()
 export class ProcessorService {
-    private readonly logger = new Logger(ProcessorService.name);
-    constructor(
-        private readonly prismaService: PrismaService,
-        @Inject(forwardRef(() => ApplicationsService))
-        private applicationsService: ApplicationSendersService,
-        @Inject(forwardRef(() => TelegramService))
-        private readonly telegramService: TelegramService,
-        private readonly balanceService: BalanceService,
-        private httpService: HttpService,
-        private configService: ConfigService,
-        private readonly reservationService: ReservationService,
-        @Inject(forwardRef(() => require('./mailing.service').MailingService))
-        private readonly mailingService: any,
-    ) { }
+  private readonly logger = new Logger(ProcessorService.name);
+  constructor(
+    private readonly prismaService: PrismaService,
+    @Inject(forwardRef(() => ApplicationSendersService))
+    private applicationsService: ApplicationSendersService,
+    @Inject(forwardRef(() => TelegramService))
+    private readonly telegramService: TelegramService,
+    private readonly balanceService: BalanceService,
+    private httpService: HttpService,
+    private configService: ConfigService,
+    private readonly reservationService: ReservationService,
+    @Inject(forwardRef(() => MailingService))
+    private readonly mailingService: MailingService,
+  ) {}
 
-    /**
-     * Определяет финальные данные поста для отправки
-     * Если targetBot имеет свой контент - используем его, иначе берем из mailing
-     */
-    private getPostData(mailing: Mailing, targetBot: MailingTargetBots) {
-        return {
-            postContent: targetBot.postContent || mailing.postContent,
-            postMedia: targetBot.postMedia || mailing.postMedia,
-            postMediaType: targetBot.postMediaType || mailing.postMediaType,
-            buttonArray: this.extractButtonArray(targetBot.postButtons || mailing.postButtons)
+  /**
+   * Определяет финальные данные поста для отправки
+   * Если targetBot имеет свой контент - используем его, иначе берем из mailing
+   */
+  private getPostData(mailing: Mailing, targetBot: MailingTargetBots) {
+    return {
+      postContent: targetBot.postContent || mailing.postContent,
+      postMedia: targetBot.postMedia || mailing.postMedia,
+      postMediaType: targetBot.postMediaType || mailing.postMediaType,
+      buttonArray: this.extractButtonArray(
+        targetBot.postButtons || mailing.postButtons,
+      ),
+    };
+  }
+
+  /**
+   * Извлекает массив строк кнопок из JSON
+   */
+  private extractButtonArray(buttons: any): string[][] {
+    // Если это массив массивов строк — возвращаем как есть
+    if (Array.isArray(buttons) && Array.isArray(buttons[0])) {
+      return buttons;
+    }
+    // Если это массив строк — оборачиваем каждую строку в отдельный ряд
+    if (Array.isArray(buttons) && buttons.every((b) => typeof b === 'string')) {
+      return buttons.map((b) => [b]);
+    }
+    return [];
+  }
+
+  async processMailing(reservation: MailingReservation) {
+    const mailing = await this.prismaService.mailing.findUnique({
+      where: { id: reservation.mailingId },
+      include: { user: { select: PUBLIC_USER_SELECT } },
+    });
+    if (!mailing) {
+      this.logger.error(`Mailing with ID ${reservation.mailingId} not found`);
+      throw new Error(`Mailing with ID ${reservation.mailingId} not found`);
+    }
+    const botSeller = await this.prismaService.botSeller.findUnique({
+      where: { id: reservation.botSellerId },
+      include: { user: { select: PUBLIC_USER_SELECT } },
+    });
+    if (!botSeller) {
+      this.logger.error(
+        `Bot seller with ID ${reservation.botSellerId} not found`,
+      );
+      throw new Error(
+        `Bot seller with ID ${reservation.botSellerId} not found`,
+      );
+    }
+    this.logger.log(
+      `Processing mailing ${mailing.id} for ${botSeller.isChannel ? 'channel' : 'bot'} ${botSeller.id}`,
+    );
+    const targetBot = await this.prismaService.mailingTargetBots.findFirst({
+      where: { botSellerId: botSeller.id, mailingId: mailing.id },
+    });
+    if (!targetBot) {
+      this.logger.error(`Target bot for mailing ${mailing.id} not found`);
+      throw new Error(`Target bot for mailing ${mailing.id} not found`);
+    }
+    const inviteLink = reservation.trackingLink || mailing.link;
+
+    // Получаем финальные данные поста для отправки
+    const postData = this.getPostData(mailing, targetBot);
+    const inlineKeyboard = this.createButtonWithInviteLink(
+      postData.buttonArray,
+      inviteLink,
+    );
+
+    if (botSeller.isChannel) {
+      await this.sendToChannel(
+        botSeller,
+        postData,
+        inlineKeyboard,
+        reservation.id,
+      );
+    } else {
+      await this.sendToBotUsers(
+        botSeller,
+        postData,
+        inlineKeyboard,
+        reservation.id,
+      );
+    }
+    await this.prismaService.mailingReservation.update({
+      where: { id: reservation.id },
+      data: {
+        isProcessed: true,
+        processedAt: new Date(),
+        adminApprovalStatus: 'PENDING',
+      },
+    });
+    await this.updateMailingStatistics(botSeller, mailing);
+    const perSubscriberPrice =
+      Number(
+        this.configService.get<number>(
+          botSeller.isChannel
+            ? 'SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE'
+            : 'SERVICE_DEFAULT_SUBSCRIBER_PRICE',
+          botSeller.isChannel ? 0.0002 : 0.0005,
+        ),
+      ) || 0;
+    const props: MailingNotifyProps = {
+      isChannel: botSeller.isChannel,
+      paymentType: targetBot?.paymentType || 'fixed',
+      mailingDate: reservation.date,
+      botSellerLink: botSeller.link || '',
+      mailingLink: mailing.link,
+      mailingOwnerUsername: mailing.user?.username || '',
+      botSellerOwnerUsername: botSeller.user.username || '',
+      fixedPrice: botSeller.fixedPrice || 0,
+      perSubscriberPrice,
+      reservationId: reservation.id,
+    };
+    await this.applicationsService.notifyAdminsAboutMailingExecution(props);
+  }
+
+  async sendToChannel(
+    botSeller: any,
+    postData: any,
+    buttons: any,
+    reservationId?: number,
+  ) {
+    const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
+    try {
+      this.logger.log(`Sending message to channel ${botSeller.channelId}`);
+      const inlineKeyboard = this.telegramService.buildInlineKeyboard(buttons);
+      let sentMessage;
+      if (postData.postMedia) {
+        sentMessage = await this.telegramService.sendMediaMessage(
+          mainBotToken,
+          botSeller.channelId,
+          postData,
+          inlineKeyboard,
+        );
+      } else {
+        sentMessage = await this.telegramService.sendTextMessage(
+          mainBotToken,
+          botSeller.channelId,
+          postData.postContent || '',
+          inlineKeyboard,
+        );
+      }
+      this.logger.log(
+        `Successfully sent message to channel ${botSeller.channelId}`,
+      );
+      // --- Forward message to ADMIN_CHAT_ID if isChannel ---
+      if (
+        botSeller.isChannel &&
+        sentMessage &&
+        sentMessage.result &&
+        sentMessage.result.message_id &&
+        reservationId
+      ) {
+        const { adminChatId, mailingNotifyTopicId: topicId } =
+          resolveTelegramTargets(this.configService);
+        const forwardUrl = `https://api.telegram.org/bot${mainBotToken}/forwardMessage`;
+        // Формируем тело запроса
+        const forwardBody: any = {
+          chat_id: adminChatId,
+          from_chat_id: botSeller.channelId,
+          message_id: sentMessage.result.message_id,
         };
-    }
-
-    /**
-     * Извлекает массив строк кнопок из JSON
-     */
-    private extractButtonArray(buttons: any): string[][] {
-        // Если это массив массивов строк — возвращаем как есть
-        if (Array.isArray(buttons) && Array.isArray(buttons[0])) {
-            return buttons;
+        // Добавляем message_thread_id только если adminChatId — супергруппа с темами
+        if (adminChatId.startsWith('-100') && topicId > 0) {
+          forwardBody.message_thread_id = topicId;
         }
-        // Если это массив строк — оборачиваем каждую строку в отдельный ряд
-        if (Array.isArray(buttons) && buttons.every(b => typeof b === 'string')) {
-            return buttons.map(b => [b]);
-        }
-        return [];
-    }
-
-    async processMailing(reservation: MailingReservation) {
-        const mailing = await this.prismaService.mailing.findUnique({
-            where: { id: reservation.mailingId },
-            include: { user: true }
+        this.logger.log(
+          `Forwarding message to admin chat ${adminChatId} with topic ${topicId}`,
+        );
+        const response = await fetch(forwardUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(forwardBody),
         });
-        if (!mailing) {
-            this.logger.error(`Mailing with ID ${reservation.mailingId} not found`);
-            throw new Error(`Mailing with ID ${reservation.mailingId} not found`);
-        }
-        const botSeller = await this.prismaService.botSeller.findUnique({
-            where: { id: reservation.botSellerId },
-            include: { user: true }
-        });
-        if (!botSeller) {
-            this.logger.error(`Bot seller with ID ${reservation.botSellerId} not found`);
-            throw new Error(`Bot seller with ID ${reservation.botSellerId} not found`);
-        }
-        this.logger.log(`Processing mailing ${mailing.id} for ${botSeller.isChannel ? 'channel' : 'bot'} ${botSeller.id}`);
-        const targetBot = await this.prismaService.mailingTargetBots.findFirst({
-            where: { botSellerId: botSeller.id, mailingId: mailing.id }
-        });
-        if (!targetBot) {
-            this.logger.error(`Target bot for mailing ${mailing.id} not found`);
-            throw new Error(`Target bot for mailing ${mailing.id} not found`);
-        }
-        const inviteLink = reservation.trackingLink || mailing.link;
-        
-        // Получаем финальные данные поста для отправки
-        const postData = this.getPostData(mailing, targetBot);
-        const inlineKeyboard = this.createButtonWithInviteLink(postData.buttonArray, inviteLink);
-        
-        if (botSeller.isChannel) {
-            await this.sendToChannel(botSeller, postData, inlineKeyboard, reservation.id);
+        if (response.ok) {
+          const forwardResult = await response.json();
+          if (
+            forwardResult &&
+            forwardResult.result &&
+            forwardResult.result.message_id
+          ) {
+            await this.mailingService.updateMailingReservationForwardedMessage(
+              reservationId,
+              forwardResult.result.message_id,
+            );
+          }
         } else {
-            await this.sendToBotUsers(botSeller, postData, inlineKeyboard, reservation.id);
+          let errorBody = '';
+          try {
+            errorBody = await response.text();
+          } catch {}
+          this.logger.warn('Failed to forward message to admin chat', {
+            status: response.status,
+            body: errorBody,
+          });
         }
-        await this.prismaService.mailingReservation.update({
-            where: { id: reservation.id },
-            data: {
-                isProcessed: true,
-                processedAt: new Date(),
-                adminApprovalStatus: 'PENDING',
-            }
-        });
-        await this.updateMailingStatistics(botSeller, mailing);
-        const props: MailingNotifyProps = {
-            isChannel: botSeller.isChannel,
-            paymentType: targetBot?.paymentType || 'fixed',
-            mailingDate: reservation.date,
-            botSellerLink: botSeller.link || '',
-            mailingLink: mailing.link,
-            mailingOwnerUsername: mailing.user?.username || '',
-            botSellerOwnerUsername: botSeller.user.username || '',
-            fixedPrice: botSeller.fixedPrice || 0,
-            subscriberPrice: botSeller.subscriberPrice || 0,
-            reservationId: reservation.id,
-        };
-        await this.applicationsService.notifyAdminsAboutMailingExecution(props);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Failed to send message to channel ${botSeller.channelId}:`,
+        error,
+      );
+      throw error;
+    }
+  }
+
+  async sendToBotUsers(
+    botSeller: BotSeller,
+    postData: any,
+    buttons: any,
+    reservationId: number,
+  ) {
+    if (!botSeller.statisticsFilePath) {
+      this.logger.warn(`No statistics file for bot ${botSeller.id}, skipping`);
+      return;
     }
 
-    async sendToChannel(botSeller: any, postData: any, buttons: any, reservationId?: number) {
-        const mainBotToken = this.configService.get<string>('MAIN_BOT', '');
-        try {
-            this.logger.log(`Sending message to channel ${botSeller.channelId}`);
-            const inlineKeyboard = this.telegramService.buildInlineKeyboard(buttons);
-            let sentMessage;
-            if (postData.postMedia) {
-                sentMessage = await this.telegramService.sendMediaMessage(mainBotToken, botSeller.channelId, postData, inlineKeyboard);
-            } else {
-                sentMessage = await this.telegramService.sendTextMessage(mainBotToken, botSeller.channelId, postData.postContent || '', inlineKeyboard);
-            }
-            this.logger.log(`Successfully sent message to channel ${botSeller.channelId}`);
-            // --- Forward message to ADMIN_CHAT_ID if isChannel ---
-            if (botSeller.isChannel && sentMessage && sentMessage.result && sentMessage.result.message_id && reservationId) {
-                const { adminChatId, mailingNotifyTopicId: topicId } = resolveTelegramTargets(this.configService);
-                const forwardUrl = `https://api.telegram.org/bot${mainBotToken}/forwardMessage`;
-                // Формируем тело запроса
-                const forwardBody: any = {
-                    chat_id: adminChatId,
-                    from_chat_id: botSeller.channelId,
-                    message_id: sentMessage.result.message_id
-                };
-                // Добавляем message_thread_id только если adminChatId — супергруппа с темами
-                if (adminChatId.startsWith('-100') && topicId > 0) {
-                    forwardBody.message_thread_id = topicId;
-                }
-                this.logger.log(`Forwarding message to admin chat ${adminChatId} with topic ${topicId}`);
-                const response = await fetch(forwardUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(forwardBody)
-                });
-                if (response.ok) {
-                    const forwardResult = await response.json();
-                    if (forwardResult && forwardResult.result && forwardResult.result.message_id) {
-                        await this.mailingService.updateMailingReservationForwardedMessage(reservationId, forwardResult.result.message_id);
-                    }
-                } else {
-                    let errorBody = '';
-                    try { errorBody = await response.text(); } catch { }
-                    this.logger.warn('Failed to forward message to admin chat', { status: response.status, body: errorBody });
-                }
-            }
-        } catch (error) {
-            this.logger.error(`Failed to send message to channel ${botSeller.channelId}:`, error);
-            throw error;
-        }
-    }
+    try {
+      this.logger.log(
+        `Processing mailing for bot ${botSeller.id} via Go worker`,
+      );
+      this.logger.log(
+        `Using statistics file URL: ${botSeller.statisticsFilePath}`,
+      );
 
-    async sendToBotUsers(botSeller: BotSeller, postData: any, buttons: any, reservationId: number) {
+      // Подготавливаем данные для отправки в Go микросервис
+      const mailingData = {
+        mailing_id: `${reservationId}`,
+        bot_token: botSeller.botToken,
+        users_file_url: botSeller.statisticsFilePath,
+        message_data: {
+          text: postData.postContent || '',
+          post_media: postData.postMedia
+            ? process.cwd() + postData.postMedia
+            : '',
+          post_media_type:
+            postData.postMediaType === 'image'
+              ? 'photo'
+              : postData.postMediaType || 'photo',
+          post_content: postData.postContent || '',
+        },
+        inline_keyboard: buttons,
+        rate_limit: 25,
+        admin_chat_id: resolveTelegramTargets(this.configService)
+          .mailingsChatId,
+        admin_message_id: 0,
+      };
 
-        if (!botSeller.statisticsFilePath) {
-            this.logger.warn(`No statistics file for bot ${botSeller.id}, skipping`);
-            return;
-        }
-        
-        try {
-            this.logger.log(`Processing mailing for bot ${botSeller.id} via Go worker`);
-            this.logger.log(`Using statistics file URL: ${botSeller.statisticsFilePath}`);
+      // Отправляем запрос в Go микросервис
+      const goWorkerUrl = this.configService.get(
+        'GO_MAILING_WORKER_URL',
+        'http://go-mailing-worker:8080',
+      );
 
-            // Подготавливаем данные для отправки в Go микросервис
-            const mailingData = {
-                mailing_id: `${reservationId}`,
-                bot_token: botSeller.botToken,
-                users_file_url: botSeller.statisticsFilePath,
-                message_data: {
-                    text: postData.postContent || '',
-                    post_media: postData.postMedia ? (process.cwd() + postData.postMedia) : '',
-                    post_media_type: postData.postMediaType === 'image' ? 'photo' : (postData.postMediaType || 'photo'),
-                    post_content: postData.postContent || ''
-                },
-                inline_keyboard: buttons,
-                rate_limit: 25,
-                admin_chat_id: resolveTelegramTargets(this.configService).mailingsChatId,
-                admin_message_id: 0
-            };
+      this.logger.log(
+        `Sending mailing request to Go worker: ${goWorkerUrl}/api/v1/mailing`,
+      );
 
-            // Отправляем запрос в Go микросервис
-            const goWorkerUrl = this.configService.get('GO_MAILING_WORKER_URL', 'http://go-mailing-worker:8080');
-            
-            this.logger.log(`Sending mailing request to Go worker: ${goWorkerUrl}/api/v1/mailing`);
-            this.logger.debug(`Mailing data:`, mailingData);
-            
-            const response = await this.httpService.axiosRef.post(`${goWorkerUrl}/api/v1/mailing`, mailingData, {
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                timeout: 30000 // 30 секунд таймаут
-            });
+      const response = await this.httpService.axiosRef.post(
+        `${goWorkerUrl}/api/v1/mailing`,
+        mailingData,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          timeout: 30000, // 30 секунд таймаут
+        },
+      );
 
-            if (response.status === 200) {
-                this.logger.log(`Successfully submitted mailing to Go worker:`, response.data);
-                this.logger.log(`Mailing for bot ${botSeller.id} queued in Go worker with ${response.data.total_tasks} tasks`);
-                
-                // Обновляем статистику рассылки
-                await this.updateMailingStatistics(botSeller, { id: reservationId });
-                await this.reservationService.createQueueRecord(reservationId, `mailing_${reservationId}`, response.data.total_users);
-                
-                return {
-                    success: true,
-                    totalTasks: response.data.total_tasks,
-                    totalUsers: response.data.total_users,
-                    failedTasks: response.data.failed_tasks
-                };
-            } else {
-                throw new Error(`Go worker returned status ${response.status}: ${JSON.stringify(response.data)}`);
-            }
+      if (response.status === 200) {
+        this.logger.log(
+          `Successfully submitted mailing to Go worker:`,
+          response.data,
+        );
+        this.logger.log(
+          `Mailing for bot ${botSeller.id} queued in Go worker with ${response.data.total_tasks} tasks`,
+        );
 
-        } catch (error) {
-            this.logger.error(`Error sending mailing to Go worker:`, error);
-            if (error.response) {
-                this.logger.error(`Go worker response error:`, {
-                    status: error.response.status,
-                    data: error.response.data
-                });
-            }
-            throw error;
-        }
-    }
+        // Обновляем статистику рассылки
+        await this.updateMailingStatistics(botSeller, { id: reservationId });
+        await this.reservationService.createQueueRecord(
+          reservationId,
+          `mailing_${reservationId}`,
+          response.data.total_users,
+        );
 
-
-    async readUserList(filePath: string): Promise<Array<{ userId: string, lang?: string }>> {
-        const users: Array<{ userId: string, lang?: string }> = [];
-        const fileStream = fs.createReadStream(filePath);
-        const rl = readline.createInterface({
-            input: fileStream,
-            crlfDelay: Infinity
-        });
-        for await (const line of rl) {
-            const trimmedLine = line.trim();
-            if (!trimmedLine) continue;
-            const parts = trimmedLine.split(':');
-            if (parts.length === 1) {
-                users.push({ userId: parts[0] });
-            } else if (parts.length >= 2) {
-                users.push({ userId: parts[0], lang: parts[1] });
-            }
-        }
-        return users;
-    }
-
-    applyFilters(users: Array<{ userId: string, lang?: string }>, filters: any): Array<{ userId: string, lang?: string }> {
-        if (!filters || Object.keys(filters).length === 0) {
-            return users;
-        }
-        return users.filter(user => {
-            if (filters.language && user.lang && filters.language !== user.lang) {
-                return false;
-            }
-            return true;
-        });
-    }
-
-    buildInlineKeyboard(buttons) {
-        if (buttons && typeof buttons === 'object' && buttons.inline_keyboard) {
-            return buttons;
-        }
-        return undefined;
-    }
-
-
-
-    async sendTextMessage(botToken, chatId, text, inlineKeyboard) {
-        const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                chat_id: chatId,
-                text: text,
-                parse_mode: 'HTML',
-                reply_markup: inlineKeyboard
-            }),
-        });
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(`Failed to send message: ${JSON.stringify(errorData)}`);
-        }
-        return await response.json();
-    }
-
-    async sendMediaMessage(botToken, chatId, mailing, inlineKeyboard) {
-        if (!botToken || !botToken.includes(':')) {
-            throw new Error(`Invalid bot token format`);
-        }
-        let mediaType = mailing.postMediaType || 'photo';
-        let endpoint;
-        switch (mediaType.toLowerCase()) {
-            case 'photo': endpoint = 'sendPhoto'; break;
-            case 'video': endpoint = 'sendVideo'; break;
-            case 'document': endpoint = 'sendDocument'; break;
-            case 'audio': endpoint = 'sendAudio'; break;
-            default: endpoint = 'sendPhoto';
-        }
-        const url = `https://api.telegram.org/bot${botToken}/${endpoint}`;
-        const mediaUrl = process.cwd() + mailing.postMedia;
-        this.logger.log(`Attempting to send ${mediaType} from ${mediaUrl} to ${chatId}`);
-        if (!fs.existsSync(mediaUrl)) {
-            throw new Error(`Media file not found: ${mediaUrl}`);
-        }
-        const stats = fs.statSync(mediaUrl);
-        this.logger.log(`File size: ${stats.size} bytes`);
-        if (stats.size === 0) {
-            throw new Error(`Media file is empty: ${mediaUrl}`);
-        }
-        const maxSizes = {
-            photo: 10 * 1024 * 1024,
-            video: 50 * 1024 * 1024,
-            document: 50 * 1024 * 1024,
-            audio: 50 * 1024 * 1024
-        };
-        if (stats.size > (maxSizes[mediaType.toLowerCase()] || maxSizes.photo)) {
-            throw new Error(`File too large for ${mediaType}: ${stats.size} bytes`);
-        }
-        try {
-            const FormData = require('form-data');
-            const formData = new FormData();
-            formData.append('chat_id', chatId);
-            if (mailing.postContent && mailing.postContent.trim()) {
-                formData.append('caption', mailing.postContent);
-                formData.append('parse_mode', 'HTML');
-            }
-            if (inlineKeyboard) {
-                formData.append('reply_markup', JSON.stringify(inlineKeyboard));
-            }
-            const mediaField = mediaType.toLowerCase() === 'photo' ? 'photo' :
-                mediaType.toLowerCase() === 'video' ? 'video' :
-                    mediaType.toLowerCase() === 'audio' ? 'audio' : 'document';
-            formData.append(mediaField, fs.createReadStream(mediaUrl));
-            const response = await this.httpService.axiosRef({
-                method: 'POST',
-                url: url,
-                data: formData,
-                headers: { ...formData.getHeaders() },
-                timeout: 60000,
-                validateStatus: function (status) { return status < 500; }
-            });
-            this.logger.log(`Telegram API response status: ${response.status}`);
-            this.logger.log(`Telegram API response data:`, response.data);
-            if (response.status >= 400) {
-                throw new Error(`Failed to send media message: ${JSON.stringify(response.data)}`);
-            }
-            return response.data;
-        } catch (error) {
-            this.logger.error(`Error in sendMediaMessage:`, error);
-            if (error.response) {
-                this.logger.error(`Response status: ${error.response.status}`);
-                this.logger.error(`Response data:`, error.response.data);
-                if (error.response.data && error.response.data.description) {
-                    throw new Error(`Telegram API error: ${error.response.data.description}`);
-                }
-            }
-            if (mediaType.toLowerCase() !== 'document') {
-                this.logger.warn(`Failed to send as ${mediaType}, trying as document...`);
-                try {
-                    const documentMailing = { ...mailing, postMediaType: 'document' };
-                    return await this.sendMediaMessage(botToken, chatId, documentMailing, inlineKeyboard);
-                } catch (fallbackError) {
-                    this.logger.error(`Fallback also failed:`, fallbackError);
-                }
-            }
-            throw error;
-        }
-    }
-
-    async updateMailingStatistics(botSeller, mailing) {
-        try {
-            await this.prismaService.botSeller.update({
-                where: { id: botSeller.id },
-                data: { lastMailingDate: new Date() }
-            });
-            this.logger.log(`Updated mailing statistics for bot seller ${botSeller.id}`);
-        } catch (error) {
-            this.logger.error(`Failed to update mailing statistics:`, error);
-        }
-    }
-
-    createButtonWithInviteLink(buttons: string[][], inviteLink: string) {
-        if (!Array.isArray(buttons) || buttons.length === 0 || !inviteLink) {
-            return undefined;
-        }
-        // Всегда ожидается массив массивов строк
-        // [["A", "B"], ["C"]] -> несколько кнопок в ряд
         return {
-            inline_keyboard: buttons.map(row =>
-                Array.isArray(row)
-                    ? row.map(text => ({ text, url: inviteLink }))
-                    : [{ text: row, url: inviteLink }]
-            )
+          success: true,
+          totalTasks: response.data.total_tasks,
+          totalUsers: response.data.total_users,
+          failedTasks: response.data.failed_tasks,
         };
-    }
-
-    /**
-     * Обновляет статус рассылки (APPROVED, REJECTED, WAITING) и уведомляет владельца
-     * @param mailingId ID рассылки
-     * @param status Новый статус ('APPROVED' | 'REJECTED' | 'WAITING')
-     */
-    async updateMailingStatus(mailingId: number, status: 'APPROVED' | 'REJECTED' | 'WAITING'): Promise<boolean> {
-        try {
-            const mailing = await this.prismaService.mailing.findUnique({
-                where: { id: mailingId },
-                include: { user: true }
-            });
-            if (!mailing) {
-                this.logger.error(`Mailing with ID ${mailingId} not found`);
-                // Можно пробросить ошибку или вернуть false
-                return false;
-            }
-            await this.prismaService.mailing.update({
-                where: { id: mailingId },
-                data: { status }
-            });
-            // Уведомление владельца рассылки (если есть Telegram ID)
-            if (mailing.user?.telegramId) {
-                let notifyMsg = '';
-                switch (status) {
-                    case 'APPROVED':
-                        notifyMsg = '✅Ваша заявка на рассылку была одобрена! Для старта забронируйте дату рассылки у продавцов.';
-                        break;
-                    case 'REJECTED':
-                        notifyMsg = '❌Ваша заявка на рассылку была отклонена!';
-                        break;
-                    case 'WAITING':
-                        notifyMsg = '⏳Ваша заявка на рассылку отправлена в ожидание.';
-                        break;
-                }
-                try {
-                    await this.telegramService.notifyUser(mailing.user.telegramId, notifyMsg);
-                } catch (err) {
-                    this.logger.warn(`Failed to notify user ${mailing.user.telegramId}: ${err?.message}`);
-                }
-            }
-            this.logger.log(`Mailing #${mailingId} status updated to ${status}`);
-            return true;
-        } catch (error) {
-            this.logger.error(`Error updating mailing status: ${error?.message}`);
-            return false;
-        }
-    }
-
-    async getAverageQueueSpeed(queueName: string): Promise<number> {
-        const queue = await this.prismaService.reservationQueue.findFirst({
-            where: { queueName }
+      } else {
+        throw new Error(
+          `Go worker returned status ${response.status}: ${JSON.stringify(response.data)}`,
+        );
+      }
+    } catch (error) {
+      this.logger.error(`Error sending mailing to Go worker:`, error);
+      if (error.response) {
+        this.logger.error(`Go worker response error:`, {
+          status: error.response.status,
+          data: error.response.data,
         });
-        if (!queue) {
-            this.logger.warn(`Queue ${queueName} not found`);
-            return 0;
-        }
+      }
+      throw error;
+    }
+  }
 
-        const durationSeconds = ((queue.updatedAt.getTime() || Date.now()) - queue.createdAt.getTime()) / 1000;
-        if (durationSeconds <= 0) {
-            this.logger.warn(`Queue ${queueName} has invalid duration: ${durationSeconds} seconds`);
-            return 0;
-        }
+  async readUserList(
+    filePath: string,
+  ): Promise<Array<{ userId: string; lang?: string }>> {
+    const users: Array<{ userId: string; lang?: string }> = [];
+    const fileStream = fs.createReadStream(filePath);
+    const rl = readline.createInterface({
+      input: fileStream,
+      crlfDelay: Infinity,
+    });
+    for await (const line of rl) {
+      const trimmedLine = line.trim();
+      if (!trimmedLine) continue;
+      const parts = trimmedLine.split(':');
+      if (parts.length === 1) {
+        users.push({ userId: parts[0] });
+      } else if (parts.length >= 2) {
+        users.push({ userId: parts[0], lang: parts[1] });
+      }
+    }
+    return users;
+  }
 
-        const totalProcessed = queue.sentCount + queue.failedCount;
-        if (totalProcessed === 0) {
-            return 0;
-        }
+  applyFilters(
+    users: Array<{ userId: string; lang?: string }>,
+    filters: any,
+  ): Array<{ userId: string; lang?: string }> {
+    if (!filters || Object.keys(filters).length === 0) {
+      return users;
+    }
+    return users.filter((user) => {
+      if (filters.language && user.lang && filters.language !== user.lang) {
+        return false;
+      }
+      return true;
+    });
+  }
 
-        // Возвращаем скорость в msg/sec
-        const messagesPerSecond = totalProcessed / durationSeconds;
-        return Math.round(messagesPerSecond * 100) / 100; // Округляем до 2 знаков после запятой
+  buildInlineKeyboard(buttons) {
+    if (buttons && typeof buttons === 'object' && buttons.inline_keyboard) {
+      return buttons;
+    }
+    return undefined;
+  }
+
+  async sendTextMessage(botToken, chatId, text, inlineKeyboard) {
+    const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'HTML',
+        reply_markup: inlineKeyboard,
+      }),
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`Failed to send message: ${JSON.stringify(errorData)}`);
+    }
+    return await response.json();
+  }
+
+  async sendMediaMessage(botToken, chatId, mailing, inlineKeyboard) {
+    if (!botToken || !botToken.includes(':')) {
+      throw new Error(`Invalid bot token format`);
+    }
+    let mediaType = mailing.postMediaType || 'photo';
+    let endpoint;
+    switch (mediaType.toLowerCase()) {
+      case 'photo':
+        endpoint = 'sendPhoto';
+        break;
+      case 'video':
+        endpoint = 'sendVideo';
+        break;
+      case 'document':
+        endpoint = 'sendDocument';
+        break;
+      case 'audio':
+        endpoint = 'sendAudio';
+        break;
+      default:
+        endpoint = 'sendPhoto';
+    }
+    const url = `https://api.telegram.org/bot${botToken}/${endpoint}`;
+    const mediaUrl = process.cwd() + mailing.postMedia;
+    this.logger.log(
+      `Attempting to send ${mediaType} from ${mediaUrl} to ${chatId}`,
+    );
+    if (!fs.existsSync(mediaUrl)) {
+      throw new Error(`Media file not found: ${mediaUrl}`);
+    }
+    const stats = fs.statSync(mediaUrl);
+    this.logger.log(`File size: ${stats.size} bytes`);
+    if (stats.size === 0) {
+      throw new Error(`Media file is empty: ${mediaUrl}`);
+    }
+    const maxSizes = {
+      photo: 10 * 1024 * 1024,
+      video: 50 * 1024 * 1024,
+      document: 50 * 1024 * 1024,
+      audio: 50 * 1024 * 1024,
+    };
+    if (stats.size > (maxSizes[mediaType.toLowerCase()] || maxSizes.photo)) {
+      throw new Error(`File too large for ${mediaType}: ${stats.size} bytes`);
+    }
+    try {
+      const FormData = require('form-data');
+      const formData = new FormData();
+      formData.append('chat_id', chatId);
+      if (mailing.postContent && mailing.postContent.trim()) {
+        formData.append('caption', mailing.postContent);
+        formData.append('parse_mode', 'HTML');
+      }
+      if (inlineKeyboard) {
+        formData.append('reply_markup', JSON.stringify(inlineKeyboard));
+      }
+      const mediaField =
+        mediaType.toLowerCase() === 'photo'
+          ? 'photo'
+          : mediaType.toLowerCase() === 'video'
+            ? 'video'
+            : mediaType.toLowerCase() === 'audio'
+              ? 'audio'
+              : 'document';
+      formData.append(mediaField, fs.createReadStream(mediaUrl));
+      const response = await this.httpService.axiosRef({
+        method: 'POST',
+        url: url,
+        data: formData,
+        headers: { ...formData.getHeaders() },
+        timeout: 60000,
+        validateStatus: function (status) {
+          return status < 500;
+        },
+      });
+      this.logger.log(`Telegram API response status: ${response.status}`);
+      this.logger.log(`Telegram API response data:`, response.data);
+      if (response.status >= 400) {
+        throw new Error(
+          `Failed to send media message: ${JSON.stringify(response.data)}`,
+        );
+      }
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Error in sendMediaMessage:`, error);
+      if (error.response) {
+        this.logger.error(`Response status: ${error.response.status}`);
+        this.logger.error(`Response data:`, error.response.data);
+        if (error.response.data && error.response.data.description) {
+          throw new Error(
+            `Telegram API error: ${error.response.data.description}`,
+          );
+        }
+      }
+      if (mediaType.toLowerCase() !== 'document') {
+        this.logger.warn(
+          `Failed to send as ${mediaType}, trying as document...`,
+        );
+        try {
+          const documentMailing = { ...mailing, postMediaType: 'document' };
+          return await this.sendMediaMessage(
+            botToken,
+            chatId,
+            documentMailing,
+            inlineKeyboard,
+          );
+        } catch (fallbackError) {
+          this.logger.error(`Fallback also failed:`, fallbackError);
+        }
+      }
+      throw error;
+    }
+  }
+
+  async updateMailingStatistics(botSeller, mailing) {
+    try {
+      await this.prismaService.botSeller.update({
+        where: { id: botSeller.id },
+        data: { lastMailingDate: new Date() },
+      });
+      this.logger.log(
+        `Updated mailing statistics for bot seller ${botSeller.id}`,
+      );
+    } catch (error) {
+      this.logger.error(`Failed to update mailing statistics:`, error);
+    }
+  }
+
+  createButtonWithInviteLink(buttons: string[][], inviteLink: string) {
+    if (!Array.isArray(buttons) || buttons.length === 0 || !inviteLink) {
+      return undefined;
+    }
+    // Всегда ожидается массив массивов строк
+    // [["A", "B"], ["C"]] -> несколько кнопок в ряд
+    return {
+      inline_keyboard: buttons.map((row) =>
+        Array.isArray(row)
+          ? row.map((text) => ({ text, url: inviteLink }))
+          : [{ text: row, url: inviteLink }],
+      ),
+    };
+  }
+
+  /**
+   * Обновляет статус рассылки (APPROVED, REJECTED, WAITING) и уведомляет владельца
+   * @param mailingId ID рассылки
+   * @param status Новый статус ('APPROVED' | 'REJECTED' | 'WAITING')
+   */
+  async updateMailingStatus(
+    mailingId: number,
+    status: 'APPROVED' | 'REJECTED' | 'WAITING',
+  ): Promise<boolean> {
+    try {
+      const mailing = await this.prismaService.mailing.findUnique({
+        where: { id: mailingId },
+        include: { user: { select: PUBLIC_USER_SELECT } },
+      });
+      if (!mailing) {
+        this.logger.error(`Mailing with ID ${mailingId} not found`);
+        // Можно пробросить ошибку или вернуть false
+        return false;
+      }
+      await this.prismaService.mailing.update({
+        where: { id: mailingId },
+        data: { status },
+      });
+      // Уведомление владельца рассылки (если есть Telegram ID)
+      if (mailing.user?.telegramId) {
+        let notifyMsg = '';
+        switch (status) {
+          case 'APPROVED':
+            notifyMsg =
+              '✅Ваша заявка на рассылку была одобрена! Для старта забронируйте дату рассылки у продавцов.';
+            break;
+          case 'REJECTED':
+            notifyMsg = '❌Ваша заявка на рассылку была отклонена!';
+            break;
+          case 'WAITING':
+            notifyMsg = '⏳Ваша заявка на рассылку отправлена в ожидание.';
+            break;
+        }
+        try {
+          await this.telegramService.notifyUser(
+            mailing.user.telegramId,
+            notifyMsg,
+          );
+        } catch (err) {
+          this.logger.warn(
+            `Failed to notify user ${mailing.user.telegramId}: ${err?.message}`,
+          );
+        }
+      }
+      this.logger.log(`Mailing #${mailingId} status updated to ${status}`);
+      return true;
+    } catch (error) {
+      this.logger.error(`Error updating mailing status: ${error?.message}`);
+      return false;
+    }
+  }
+
+  async getAverageQueueSpeed(queueName: string): Promise<number> {
+    const queue = await this.prismaService.reservationQueue.findFirst({
+      where: { queueName },
+    });
+    if (!queue) {
+      this.logger.warn(`Queue ${queueName} not found`);
+      return 0;
     }
 
+    const durationSeconds =
+      ((queue.updatedAt.getTime() || Date.now()) - queue.createdAt.getTime()) /
+      1000;
+    if (durationSeconds <= 0) {
+      this.logger.warn(
+        `Queue ${queueName} has invalid duration: ${durationSeconds} seconds`,
+      );
+      return 0;
+    }
+
+    const totalProcessed = queue.sentCount + queue.failedCount;
+    if (totalProcessed === 0) {
+      return 0;
+    }
+
+    // Возвращаем скорость в msg/sec
+    const messagesPerSecond = totalProcessed / durationSeconds;
+    return Math.round(messagesPerSecond * 100) / 100; // Округляем до 2 знаков после запятой
+  }
 }

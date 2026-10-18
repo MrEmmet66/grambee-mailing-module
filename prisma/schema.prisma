@@ -18,7 +18,7 @@ model User {
   telegramId String @unique
   username String? @unique
   createdAt DateTime @default(now())
-  refreshToken String?
+  refreshTokenHash String? @map("refreshToken")
   passwordHash String
 
   BotSeller BotSeller[]

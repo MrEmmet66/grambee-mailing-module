@@ -7,7 +7,7 @@ export type MailingNotifyProps = {
     mailingOwnerUsername: string;
     botSellerOwnerUsername: string;
     fixedPrice: number;
-    subscriberPrice: number;
+    perSubscriberPrice: number; // цена за подписчика из конфига, не из BotSeller
     reservationId: number;
     isLastMailing?: boolean; // ✅ Добавляем флаг последней рассылки
 }

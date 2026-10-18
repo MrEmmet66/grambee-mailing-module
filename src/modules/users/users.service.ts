@@ -1,68 +1,32 @@
-import { Injectable, BadRequestException, NotFoundException, Inject, forwardRef } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
-import { CreateUserDto, UpdateUserDto } from './dto';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { CreateUserDto } from './dto';
 import { AuthService } from '../auth/auth.service';
+import { PUBLIC_USER_SELECT } from './public-user';
 
 @Injectable()
 export class UsersService {
   constructor(
-    private prisma: PrismaService,
-    @Inject(forwardRef(() => AuthService))
+    private readonly prisma: PrismaService,
     private readonly authService: AuthService,
   ) {}
-
-  async create(createUserDto: CreateUserDto) {
-    if (!createUserDto.telegramId) {
-      throw new BadRequestException('telegramId is required');
-    }
-    // Используем AuthService для регистрации и генерации токенов
-    const { user, accessToken, refreshToken } = await this.authService.register(createUserDto);
-    return { user, accessToken, refreshToken };
+  create(dto: CreateUserDto) {
+    return this.authService.register(dto);
   }
-
-  async findAll() {
-    return this.prisma.user.findMany({
-      include: {
-        BotSeller: true,
-      },
-    });
-  }
-
   async findOne(id: number) {
-    return this.prisma.user.findUnique({
+    const user = await this.prisma.user.findUnique({
       where: { id },
-      include: {
-        BotSeller: true,
-      },
+      select: PUBLIC_USER_SELECT,
     });
+    if (!user) throw new NotFoundException();
+    return user;
   }
-
   async findByTelegramId(telegramId: string) {
     const user = await this.prisma.user.findUnique({
       where: { telegramId },
-      include: {
-        BotSeller: true,
-      },
+      select: PUBLIC_USER_SELECT,
     });
-
-    if (!user) {
-      throw new NotFoundException(`User with telegramId ${telegramId} not found`);
-    }
-
+    if (!user) throw new NotFoundException();
     return user;
-
-  }
-
-  async update(id: number, updateUserDto: UpdateUserDto) {
-    return this.prisma.user.update({
-      where: { id },
-      data: updateUserDto,
-    });
-  }
-
-  async remove(id: number) {
-    return this.prisma.user.delete({
-      where: { id },
-    });
   }
 }

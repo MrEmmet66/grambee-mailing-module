@@ -1,517 +1,609 @@
-import { Injectable, Logger, NotFoundException, ConflictException, PreconditionFailedException, Inject, forwardRef } from '@nestjs/common';
-import { PrismaService } from 'prisma/prisma.service';
+import { PUBLIC_USER_SELECT } from '../../users/public-user';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  ConflictException,
+  PreconditionFailedException,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
+import { PrismaService } from '../../../../prisma/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { BalanceService } from '../../balance/balance.service';
 import { TelegramService } from '../../telegram/telegram.service';
 import { CreateMailingReservationDto } from '../dto/createMailingReservation.dto';
-import { ReservationCancellationResult, ReservationCreationResult } from '../types/reservation.types';
+import {
+  ReservationCancellationResult,
+  ReservationCreationResult,
+} from '../types/reservation.types';
 import { MailingReservation } from '@prisma/client';
 import { CompleteMailingDto } from '../dto/completeMailing.dto';
 
 @Injectable()
 export class ReservationService {
-    private readonly logger = new Logger(ReservationService.name);
+  private readonly logger = new Logger(ReservationService.name);
 
-    constructor(
-        private readonly prismaService: PrismaService,
-        private readonly configService: ConfigService,
-        private readonly balanceService: BalanceService,
-        @Inject(forwardRef(() => TelegramService))
-        private readonly telegramService: TelegramService,
-    ) { }
+  constructor(
+    private readonly prismaService: PrismaService,
+    private readonly configService: ConfigService,
+    private readonly balanceService: BalanceService,
+    @Inject(forwardRef(() => TelegramService))
+    private readonly telegramService: TelegramService,
+  ) {}
 
-    async getMailingsByDate(date: Date, sellerId: string) {
-        return this.prismaService.mailingReservation.findMany({
-            where: {
-                date: date,
-                botSellerId: Number(sellerId)
-            },
-            include: {
-                mailing: true
-            }
-        });
+  async getMailingsByDate(date: Date, sellerId: string) {
+    return this.prismaService.mailingReservation.findMany({
+      where: {
+        date: date,
+        botSellerId: Number(sellerId),
+      },
+      include: {
+        mailing: true,
+      },
+    });
+  }
+
+  async getMailingReservations(mailingId: number) {
+    const mailing = await this.prismaService.mailingReservation.findMany({
+      where: {
+        mailingId: mailingId,
+        isProcessed: false,
+        adminApprovalStatus: { not: 'FROZEN' },
+      },
+      orderBy: {
+        date: 'asc',
+      },
+    });
+
+    if (!mailing) {
+      throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
     }
 
-    async getMailingReservations(mailingId: number) {
-        const mailing = await this.prismaService.mailingReservation.findMany({
-            where: { mailingId: mailingId, isProcessed: false, adminApprovalStatus: { not: 'FROZEN' } },
-            orderBy: {
-                date: 'asc'
-            }
-        });
+    return mailing;
+  }
+  async removeMailingReservation(
+    reservationId: number,
+  ): Promise<ReservationCancellationResult> {
+    const reservation = await this.prismaService.mailingReservation.findUnique({
+      where: { id: reservationId },
+      include: {
+        mailing: {
+          include: {
+            user: { select: PUBLIC_USER_SELECT },
+          },
+        },
+        botSeller: {
+          include: {
+            user: { select: PUBLIC_USER_SELECT },
+          },
+        },
+      },
+    });
 
-        if (!mailing) {
-            throw new NotFoundException(`Mailing with ID ${mailingId} not found`);
-        }
-
-        return mailing;
-    } async removeMailingReservation(reservationId: number): Promise<ReservationCancellationResult> {
-        const reservation = await this.prismaService.mailingReservation.findUnique({
-            where: { id: reservationId },
-            include: {
-                mailing: {
-                    include: {
-                        user: true
-                    }
-                },
-                botSeller: {
-                    include: {
-                        user: true
-                    }
-                }
-            }
-        });
-
-        if (!reservation) {
-            throw new NotFoundException(`Reservation with ID ${reservationId} not found`);
-        }
-
-        // Check if the reservation is already processed
-        if (reservation.isProcessed) {
-            throw new ConflictException(`Reservation with ID ${reservationId} is already processed`);
-        }
-
-        if (reservation.adminApprovalStatus === 'FROZEN') {
-            throw new ConflictException(`Reservation with ID ${reservationId} is frozen and cannot be deleted`);
-        }
-
-        if (reservation.mailing.isActive) {
-            throw new ConflictException(`Mailing with ID ${reservation.mailingId} is active and cannot be deleted`);
-        }        // Check 48-hour rule
-        const now = new Date();
-        const reservationDate = new Date(reservation.date);
-        const hoursUntilReservation = (reservationDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-        this.logger.log(`Checking cancellation for reservation ${reservationId}: ${hoursUntilReservation.toFixed(2)} hours until reservation date`);
-
-        if (hoursUntilReservation < 48) {
-            throw new ConflictException(`Cannot cancel reservation less than 48 hours before the scheduled date. Only ${hoursUntilReservation.toFixed(2)} hours remaining.`);
-        }
-
-        // Calculate refund amounts
-        const totalHeldAmount = reservation.heldAmount;
-        const buyerRefundAmount = totalHeldAmount * 0.7; // 70% to buyer
-        const sellerCompensationAmount = totalHeldAmount * 0.25; // 25% to seller
-        // Remaining 5% stays as cancellation fee
-
-        const buyerTelegramId = reservation.mailing.user.telegramId;
-        const sellerTelegramId = reservation.botSeller.user.telegramId; try {
-            // Release 70% from hold and return to buyer
-            await this.balanceService.releaseBalance(buyerTelegramId, {
-                amount: Number(buyerRefundAmount.toFixed(2)),
-                description: `Возврат 70% за отмену резервации рассылки #${reservation.mailingId}. Резервация #${reservationId}.`
-            });
-
-            // Withdraw remaining 25% from hold and add to seller
-            await this.balanceService.holdWithdrawBalance(buyerTelegramId, {
-                amount: Number(sellerCompensationAmount.toFixed(2)),
-                description: `Списание 25% за отмену резервации рассылки #${reservation.mailingId}. Резервация #${reservationId}.`
-            });
-
-            // Add compensation to seller
-            await this.balanceService.addBalance(sellerTelegramId, {
-                amount: Number(sellerCompensationAmount.toFixed(2)),
-                description: `Компенсация 25% за отмену резервации рассылки #${reservation.mailingId}. Резервация #${reservationId}.`
-            });
-
-            // Withdraw remaining 5% as cancellation fee (from hold)
-            const cancellationFee = totalHeldAmount - buyerRefundAmount - sellerCompensationAmount;
-            if (cancellationFee > 0) {
-                await this.balanceService.holdWithdrawBalance(buyerTelegramId, {
-                    amount: Number(cancellationFee.toFixed(2)),
-                    description: `Комиссия за отмену резервации 5%. Резервация #${reservationId}.`
-                });
-            }
-
-            this.logger.log(`Processed reservation cancellation: Buyer refund: ${buyerRefundAmount}, Seller compensation: ${sellerCompensationAmount}, Cancellation fee: ${cancellationFee}`);
-
-        } catch (error) {
-            this.logger.error(`Failed to process refund for reservation ${reservationId}: ${error.message}`);
-            throw new PreconditionFailedException(`Failed to process refund: ${error.message}`);
-        }
-
-        // Delete the reservation
-        const deletedReservation = await this.prismaService.mailingReservation.delete({
-            where: { id: reservationId }
-        });
-
-        return {
-            reservation: deletedReservation,
-            refundDetails: {
-                totalHeldAmount,
-                buyerRefundAmount,
-                sellerCompensationAmount,
-                cancellationFee: totalHeldAmount - buyerRefundAmount - sellerCompensationAmount,
-                buyerTelegramId,
-                sellerTelegramId
-            }
-        };
+    if (!reservation) {
+      throw new NotFoundException(
+        `Reservation with ID ${reservationId} not found`,
+      );
     }
 
-    async getMailingReservationsBySellerId(sellerId: number) {
-        return await this.prismaService.mailingReservation.findMany({
-            where: {
-                botSellerId: sellerId,
-                isProcessed: false,
-                adminApprovalStatus: { not: 'FROZEN' },
-                date: {
-                    gte: new Date()
-                }
-            },
-            include: {
-                mailing: true,
-                botSeller: true
-            },
-            orderBy: {
-                date: 'asc'
-            }
-        });
+    // Check if the reservation is already processed
+    if (reservation.isProcessed) {
+      throw new ConflictException(
+        `Reservation with ID ${reservationId} is already processed`,
+      );
     }
 
-    async checkAndDeactivateMailing(mailingId: number) {
-        const remainingReservations = await this.prismaService.mailingReservation.count({
-            where: {
-                mailingId: mailingId,
-                isProcessed: false,
-                adminApprovalStatus: 'APPROVED'
-            }
-        });
-
-        if (remainingReservations === 0) {
-            const updatedMailing = await this.prismaService.mailing.update({
-                where: { id: mailingId },
-                data: {
-                    isActive: false
-                }
-            });
-
-            this.logger.log(`Mailing ${mailingId} completed and deactivated`);
-            return updatedMailing;
-        }
-
-        return null;
+    if (reservation.adminApprovalStatus === 'FROZEN') {
+      throw new ConflictException(
+        `Reservation with ID ${reservationId} is frozen and cannot be deleted`,
+      );
     }
 
+    if (reservation.mailing.isActive) {
+      throw new ConflictException(
+        `Mailing with ID ${reservation.mailingId} is active and cannot be deleted`,
+      );
+    } // Check 48-hour rule
+    const now = new Date();
+    const reservationDate = new Date(reservation.date);
+    const hoursUntilReservation =
+      (reservationDate.getTime() - now.getTime()) / (1000 * 60 * 60);
 
-    async reserveMailingDay(dto: CreateMailingReservationDto): Promise<ReservationCreationResult> {
-        if (!Array.isArray(dto.dates) || dto.dates.length === 0) {
-            throw new PreconditionFailedException('No dates provided for reservation');
-        }
+    this.logger.log(
+      `Checking cancellation for reservation ${reservationId}: ${hoursUntilReservation.toFixed(2)} hours until reservation date`,
+    );
 
-        const botSeller = await this.prismaService.botSeller.findUnique({
-            where: { id: dto.sellerId }
-        });
-        if (!botSeller) {
-            throw new NotFoundException('Bot seller not found');
-        }
-
-        const mailing = await this.prismaService.mailing.findUnique({
-            where: { id: dto.mailingId }
-        });
-        if (!mailing) {
-            throw new NotFoundException('Mailing not found');
-        }
-
-        // Получаем комиссии сервиса из конфига
-        const serviceCommissionFixed = this.configService.get<number>('SERVICE_COMMISSION_FIXED', 10);
-        const serviceCommissionPerUser = this.configService.get<number>('SERVICE_COMMISSION_PER_USER', 0.00005);
-        const serviceDefaultSubscriberPrice = this.configService.get<number>('SERVICE_DEFAULT_SUBSCRIBER_PRICE', 0.0005);
-        const serviceChannelDefaultSubscriberPrice = this.configService.get<number>('SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE', 0.0002);
-
-        // Получаем пользователя из мейлинга для холда баланса
-        const user = await this.prismaService.user.findUnique({
-            where: { id: mailing.userId }
-        });
-        if (!user) {
-            throw new NotFoundException('User not found');
-        }
-
-        const reservations: MailingReservation[] = [];
-        for (const date of dto.dates) {
-            // Проверка на прошлое
-            if (date < new Date()) {
-                throw new PreconditionFailedException(`Cannot reserve past date: ${date}`);
-            }
-            // Проверка на уникальность
-            const existingReservation = await this.prismaService.mailingReservation.findFirst({
-                where: {
-                    date: date,
-                    botSellerId: dto.sellerId,
-                }
-            });
-            if (existingReservation) {
-                throw new ConflictException(`Mailing day already reserved: ${date}`);
-            }
-
-            const lockedDay = await this.prismaService.lockedDays.findFirst({
-                where: {
-                    date: date,
-                    botSellerId: dto.sellerId,
-                }
-            });
-            if (lockedDay) {
-                throw new ConflictException(`Этот день занят. Пожалуйста, выберите другой.`);
-            }
-
-
-            // Расчет стоимости и комиссии
-            let heldAmount = 0;
-            let baseAmount = 0;
-            let serviceCommission = 0;
-            if (dto.paymentType === 'fixed') {
-                baseAmount = Number(botSeller.fixedPrice) || 0;
-                // Комиссия всегда процент от стоимости продавца
-                serviceCommission = baseAmount * ((Number(serviceCommissionFixed) || 0) / 100);
-                heldAmount = baseAmount + serviceCommission;
-            } else if (dto.paymentType === 'subscriber') {
-                if (botSeller.isChannel) {
-                    baseAmount = Number(botSeller.fixedPrice) || 0;
-                    serviceCommission = Number(serviceCommissionPerUser) || 0;
-                } else {
-                    const maxUsers = Number(botSeller.totalBotAudience) || 0;
-                    if (maxUsers <= 0) {
-                        throw new PreconditionFailedException('Bot audience data is required for subscriber payment');
-                    } else {
-                        baseAmount = Number(serviceDefaultSubscriberPrice) * maxUsers;
-                        serviceCommission = Number(serviceCommissionPerUser) * maxUsers;
-                    }
-                }
-                heldAmount = baseAmount + serviceCommission;
-            } else {
-                baseAmount = Number(botSeller.fixedPrice) || 0;
-                // Комиссия всегда процент от стоимости продавца
-                serviceCommission = baseAmount * ((Number(serviceCommissionFixed) || 0) / 100);
-                heldAmount = baseAmount + serviceCommission;
-            }
-            if (isNaN(heldAmount) || heldAmount <= 0) {
-                throw new PreconditionFailedException('Calculated heldAmount is invalid.');
-            }
-            // Холдим баланс для каждой даты
-            try {
-                this.logger.log(`Holding balance for mailing reservation: ${heldAmount} (date: ${date})`);
-                await this.balanceService.holdBalance(user.telegramId.toString(), {
-                    amount: Number(heldAmount.toFixed(2)),
-                    description: `Оплата рассылки для канала ${botSeller.link} на дату ${date}.`
-                });
-            } catch (error) {
-                this.logger.error(`Failed to hold balance for mailing reservation (date: ${date}): ${error.message}`);
-                throw new PreconditionFailedException(`Не удалось зарезервировать средства на дату ${date}: ${error.message}`);
-            }
-
-
-
-            const reservation = await this.prismaService.mailingReservation.create({
-                data: {
-                    mailingId: Number(dto.mailingId),
-                    botSellerId: Number(dto.sellerId),
-                    date: date,
-                    heldAmount: parseFloat(heldAmount.toString()),
-                    trackingLink: mailing.link,
-                }
-            });
-            reservations.push(reservation);
-        }
-
-        // Check if this is the first reservation for this bot-mailing combination
-        const existingTargetBot = await this.prismaService.mailingTargetBots.findFirst({
-            where: {
-                botSellerId: dto.sellerId,
-                mailingId: dto.mailingId,
-                paymentType: dto.paymentType || 'fixed'
-            }
-        });
-        if (!existingTargetBot && reservations.length > 0) {
-            await this.prismaService.mailingTargetBots.create({
-                data: {
-                    botSellerId: dto.sellerId,
-                    mailingId: dto.mailingId,
-                    paymentType: dto.paymentType || 'fixed'
-                }
-            });
-        }
-
-        return { reservations, seller: botSeller };
+    if (hoursUntilReservation < 48) {
+      throw new ConflictException(
+        `Cannot cancel reservation less than 48 hours before the scheduled date. Only ${hoursUntilReservation.toFixed(2)} hours remaining.`,
+      );
     }
 
-    async canCancelReservation(reservationId: number): Promise<{
-        canCancel: boolean;
-        reason?: string;
-        hoursUntilReservation?: number;
-        refundPreview?: {
-            totalHeldAmount: number;
-            buyerRefundAmount: number;
-            sellerCompensationAmount: number;
-            cancellationFee: number;
-        };
-    }> {
-        const reservation = await this.prismaService.mailingReservation.findUnique({
-            where: { id: reservationId },
-            include: {
-                mailing: true
-            }
+    // Calculate refund amounts
+    const totalHeldAmount = reservation.heldAmount;
+    const buyerRefundAmount = totalHeldAmount * 0.7; // 70% to buyer
+    const sellerCompensationAmount = totalHeldAmount * 0.25; // 25% to seller
+    // Remaining 5% stays as cancellation fee
+
+    const buyerTelegramId = reservation.mailing.user.telegramId;
+    const sellerTelegramId = reservation.botSeller.user.telegramId;
+    try {
+      // Release 70% from hold and return to buyer
+      await this.balanceService.releaseBalance(buyerTelegramId, {
+        amount: Number(buyerRefundAmount.toFixed(2)),
+        description: `Возврат 70% за отмену резервации рассылки #${reservation.mailingId}. Резервация #${reservationId}.`,
+      });
+
+      // Withdraw remaining 25% from hold and add to seller
+      await this.balanceService.holdWithdrawBalance(buyerTelegramId, {
+        amount: Number(sellerCompensationAmount.toFixed(2)),
+        description: `Списание 25% за отмену резервации рассылки #${reservation.mailingId}. Резервация #${reservationId}.`,
+      });
+
+      // Add compensation to seller
+      await this.balanceService.addBalance(sellerTelegramId, {
+        amount: Number(sellerCompensationAmount.toFixed(2)),
+        description: `Компенсация 25% за отмену резервации рассылки #${reservation.mailingId}. Резервация #${reservationId}.`,
+      });
+
+      // Withdraw remaining 5% as cancellation fee (from hold)
+      const cancellationFee =
+        totalHeldAmount - buyerRefundAmount - sellerCompensationAmount;
+      if (cancellationFee > 0) {
+        await this.balanceService.holdWithdrawBalance(buyerTelegramId, {
+          amount: Number(cancellationFee.toFixed(2)),
+          description: `Комиссия за отмену резервации 5%. Резервация #${reservationId}.`,
         });
+      }
 
-        if (!reservation) {
-            return {
-                canCancel: false,
-                reason: 'Reservation not found'
-            };
-        }
-
-        if (reservation.isProcessed) {
-            return {
-                canCancel: false,
-                reason: 'Reservation is already processed'
-            };
-        }
-
-        if (reservation.adminApprovalStatus === 'FROZEN') {
-            return {
-                canCancel: false,
-                reason: 'Reservation is frozen'
-            };
-        }
-
-        if (reservation.mailing.isActive) {
-            return {
-                canCancel: false,
-                reason: 'Mailing is active and cannot be cancelled'
-            };
-        }
-
-        const now = new Date();
-        const reservationDate = new Date(reservation.date);
-        const hoursUntilReservation = (reservationDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-        if (hoursUntilReservation < 48) {
-            return {
-                canCancel: false,
-                reason: `Cannot cancel reservation less than 48 hours before the scheduled date. Only ${hoursUntilReservation.toFixed(2)} hours remaining.`,
-                hoursUntilReservation
-            };
-        }
-
-        // Calculate refund preview
-        const totalHeldAmount = reservation.heldAmount;
-        const buyerRefundAmount = totalHeldAmount * 0.7;
-        const sellerCompensationAmount = totalHeldAmount * 0.25;
-        const cancellationFee = totalHeldAmount - buyerRefundAmount - sellerCompensationAmount;
-
-        return {
-            canCancel: true,
-            hoursUntilReservation,
-            refundPreview: {
-                totalHeldAmount,
-                buyerRefundAmount,
-                sellerCompensationAmount,
-                cancellationFee
-            }
-        };
+      this.logger.log(
+        `Processed reservation cancellation: Buyer refund: ${buyerRefundAmount}, Seller compensation: ${sellerCompensationAmount}, Cancellation fee: ${cancellationFee}`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `Failed to process refund for reservation ${reservationId}: ${error.message}`,
+      );
+      throw new PreconditionFailedException(
+        `Failed to process refund: ${error.message}`,
+      );
     }
 
-    async updateReservationViews(reservationId: number, views: number): Promise<MailingReservation> {
-        const reservation = await this.prismaService.mailingReservation.findUnique({
-            where: { id: reservationId }
-        });
+    // Delete the reservation
+    const deletedReservation =
+      await this.prismaService.mailingReservation.delete({
+        where: { id: reservationId },
+      });
 
-        if (!reservation) {
-            throw new NotFoundException(`Reservation with ID ${reservationId} not found`);
-        }
+    return {
+      reservation: deletedReservation,
+      refundDetails: {
+        totalHeldAmount,
+        buyerRefundAmount,
+        sellerCompensationAmount,
+        cancellationFee:
+          totalHeldAmount - buyerRefundAmount - sellerCompensationAmount,
+        buyerTelegramId,
+        sellerTelegramId,
+      },
+    };
+  }
 
-        const updatedReservation = await this.prismaService.mailingReservation.update({
-            where: { id: reservationId },
-            data: {
-                viewCount: views
-            }
-        });
+  async getMailingReservationsBySellerId(sellerId: number) {
+    return await this.prismaService.mailingReservation.findMany({
+      where: {
+        botSellerId: sellerId,
+        isProcessed: false,
+        adminApprovalStatus: { not: 'FROZEN' },
+        date: {
+          gte: new Date(),
+        },
+      },
+      include: {
+        mailing: true,
+        botSeller: true,
+      },
+      orderBy: {
+        date: 'asc',
+      },
+    });
+  }
 
-        return updatedReservation;
+  async checkAndDeactivateMailing(mailingId: number) {
+    const remainingReservations =
+      await this.prismaService.mailingReservation.count({
+        where: {
+          mailingId: mailingId,
+          isProcessed: false,
+          adminApprovalStatus: 'APPROVED',
+        },
+      });
+
+    if (remainingReservations === 0) {
+      const updatedMailing = await this.prismaService.mailing.update({
+        where: { id: mailingId },
+        data: {
+          isActive: false,
+        },
+      });
+
+      this.logger.log(`Mailing ${mailingId} completed and deactivated`);
+      return updatedMailing;
     }
 
-    async createQueueRecord(reservationId: number, queueName: string, totalUsers: number) {
+    return null;
+  }
+
+  async reserveMailingDay(
+    dto: CreateMailingReservationDto,
+  ): Promise<ReservationCreationResult> {
+    if (!Array.isArray(dto.dates) || dto.dates.length === 0) {
+      throw new PreconditionFailedException(
+        'No dates provided for reservation',
+      );
+    }
+
+    const botSeller = await this.prismaService.botSeller.findUnique({
+      where: { id: dto.sellerId },
+    });
+    if (!botSeller) {
+      throw new NotFoundException('Bot seller not found');
+    }
+
+    const mailing = await this.prismaService.mailing.findUnique({
+      where: { id: dto.mailingId },
+    });
+    if (!mailing) {
+      throw new NotFoundException('Mailing not found');
+    }
+
+    // Получаем комиссии сервиса из конфига
+    const serviceCommissionFixed = this.configService.get<number>(
+      'SERVICE_COMMISSION_FIXED',
+      10,
+    );
+    const serviceCommissionPerUser = this.configService.get<number>(
+      'SERVICE_COMMISSION_PER_USER',
+      0.00005,
+    );
+    const serviceDefaultSubscriberPrice = this.configService.get<number>(
+      'SERVICE_DEFAULT_SUBSCRIBER_PRICE',
+      0.0005,
+    );
+    const serviceChannelDefaultSubscriberPrice = this.configService.get<number>(
+      'SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE',
+      0.0002,
+    );
+
+    // Получаем пользователя из мейлинга для холда баланса
+    const user = await this.prismaService.user.findUnique({
+      where: { id: mailing.userId },
+    });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const reservations: MailingReservation[] = [];
+    for (const date of dto.dates) {
+      // Проверка на прошлое
+      if (date < new Date()) {
+        throw new PreconditionFailedException(
+          `Cannot reserve past date: ${date}`,
+        );
+      }
+      // Проверка на уникальность
+      const existingReservation =
+        await this.prismaService.mailingReservation.findFirst({
+          where: {
+            date: date,
+            botSellerId: dto.sellerId,
+          },
+        });
+      if (existingReservation) {
+        throw new ConflictException(`Mailing day already reserved: ${date}`);
+      }
+
+      const lockedDay = await this.prismaService.lockedDays.findFirst({
+        where: {
+          date: date,
+          botSellerId: dto.sellerId,
+        },
+      });
+      if (lockedDay) {
+        throw new ConflictException(
+          `Этот день занят. Пожалуйста, выберите другой.`,
+        );
+      }
+
+      // Расчет стоимости и комиссии
+      let heldAmount = 0;
+      let baseAmount = 0;
+      let serviceCommission = 0;
+      if (dto.paymentType === 'fixed') {
+        baseAmount = Number(botSeller.fixedPrice) || 0;
+        // Комиссия всегда процент от стоимости продавца
+        serviceCommission =
+          baseAmount * ((Number(serviceCommissionFixed) || 0) / 100);
+        heldAmount = baseAmount + serviceCommission;
+      } else if (dto.paymentType === 'per_subscriber') {
+        // Оплата за подписчика: цена за единицу берётся только из конфига,
+        // холд считаем по ожидаемой аудитории продавца.
+        const audience = botSeller.isChannel
+          ? Number(botSeller.channelAudience) || 0
+          : Number(botSeller.totalBotAudience) || 0;
+        if (audience <= 0) {
+          throw new PreconditionFailedException(
+            'Audience data is required for per_subscriber payment',
+          );
+        }
+        const pricePerSubscriber = botSeller.isChannel
+          ? Number(serviceChannelDefaultSubscriberPrice) || 0
+          : Number(serviceDefaultSubscriberPrice) || 0;
+        baseAmount = pricePerSubscriber * audience;
+        serviceCommission = (Number(serviceCommissionPerUser) || 0) * audience;
+        heldAmount = baseAmount + serviceCommission;
+      } else {
+        throw new PreconditionFailedException(
+          `Unsupported payment type: ${dto.paymentType}`,
+        );
+      }
+      if (isNaN(heldAmount) || heldAmount <= 0) {
+        throw new PreconditionFailedException(
+          'Calculated heldAmount is invalid.',
+        );
+      }
+      // Холдим баланс для каждой даты
+      try {
+        this.logger.log(
+          `Holding balance for mailing reservation: ${heldAmount} (date: ${date})`,
+        );
+        await this.balanceService.holdBalance(user.telegramId.toString(), {
+          amount: Number(heldAmount.toFixed(2)),
+          description: `Оплата рассылки для канала ${botSeller.link} на дату ${date}.`,
+        });
+      } catch (error) {
+        this.logger.error(
+          `Failed to hold balance for mailing reservation (date: ${date}): ${error.message}`,
+        );
+        throw new PreconditionFailedException(
+          `Не удалось зарезервировать средства на дату ${date}: ${error.message}`,
+        );
+      }
+
+      const reservation = await this.prismaService.mailingReservation.create({
+        data: {
+          mailingId: Number(dto.mailingId),
+          botSellerId: Number(dto.sellerId),
+          date: date,
+          heldAmount: parseFloat(heldAmount.toString()),
+          trackingLink: mailing.link,
+        },
+      });
+      reservations.push(reservation);
+    }
+
+    // Check if this is the first reservation for this bot-mailing combination
+    const existingTargetBot =
+      await this.prismaService.mailingTargetBots.findFirst({
+        where: {
+          botSellerId: dto.sellerId,
+          mailingId: dto.mailingId,
+          paymentType: dto.paymentType || 'fixed',
+        },
+      });
+    if (!existingTargetBot && reservations.length > 0) {
+      await this.prismaService.mailingTargetBots.create({
+        data: {
+          botSellerId: dto.sellerId,
+          mailingId: dto.mailingId,
+          paymentType: dto.paymentType || 'fixed',
+        },
+      });
+    }
+
+    return { reservations, seller: botSeller };
+  }
+
+  async canCancelReservation(reservationId: number): Promise<{
+    canCancel: boolean;
+    reason?: string;
+    hoursUntilReservation?: number;
+    refundPreview?: {
+      totalHeldAmount: number;
+      buyerRefundAmount: number;
+      sellerCompensationAmount: number;
+      cancellationFee: number;
+    };
+  }> {
+    const reservation = await this.prismaService.mailingReservation.findUnique({
+      where: { id: reservationId },
+      include: {
+        mailing: true,
+      },
+    });
+
+    if (!reservation) {
+      return {
+        canCancel: false,
+        reason: 'Reservation not found',
+      };
+    }
+
+    if (reservation.isProcessed) {
+      return {
+        canCancel: false,
+        reason: 'Reservation is already processed',
+      };
+    }
+
+    if (reservation.adminApprovalStatus === 'FROZEN') {
+      return {
+        canCancel: false,
+        reason: 'Reservation is frozen',
+      };
+    }
+
+    if (reservation.mailing.isActive) {
+      return {
+        canCancel: false,
+        reason: 'Mailing is active and cannot be cancelled',
+      };
+    }
+
+    const now = new Date();
+    const reservationDate = new Date(reservation.date);
+    const hoursUntilReservation =
+      (reservationDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+    if (hoursUntilReservation < 48) {
+      return {
+        canCancel: false,
+        reason: `Cannot cancel reservation less than 48 hours before the scheduled date. Only ${hoursUntilReservation.toFixed(2)} hours remaining.`,
+        hoursUntilReservation,
+      };
+    }
+
+    // Calculate refund preview
+    const totalHeldAmount = reservation.heldAmount;
+    const buyerRefundAmount = totalHeldAmount * 0.7;
+    const sellerCompensationAmount = totalHeldAmount * 0.25;
+    const cancellationFee =
+      totalHeldAmount - buyerRefundAmount - sellerCompensationAmount;
+
+    return {
+      canCancel: true,
+      hoursUntilReservation,
+      refundPreview: {
+        totalHeldAmount,
+        buyerRefundAmount,
+        sellerCompensationAmount,
+        cancellationFee,
+      },
+    };
+  }
+
+  async updateReservationViews(
+    reservationId: number,
+    views: number,
+  ): Promise<MailingReservation> {
+    const reservation = await this.prismaService.mailingReservation.findUnique({
+      where: { id: reservationId },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException(
+        `Reservation with ID ${reservationId} not found`,
+      );
+    }
+
+    const updatedReservation =
+      await this.prismaService.mailingReservation.update({
+        where: { id: reservationId },
+        data: {
+          viewCount: views,
+        },
+      });
+
+    return updatedReservation;
+  }
+
+  async createQueueRecord(
+    reservationId: number,
+    queueName: string,
+    totalUsers: number,
+  ) {
     return this.prismaService.reservationQueue.create({
-        data: {
-            mailingReservationId: reservationId,
-            queueName,
-            totalUsers,
-        },
+      data: {
+        mailingReservationId: reservationId,
+        queueName,
+        totalUsers,
+      },
     });
-}
+  }
 
-async incrementQueueSent(queueName: string, count: number) {
+  async incrementQueueSent(queueName: string, count: number) {
     return this.prismaService.reservationQueue.updateMany({
-        where: { queueName },
-        data: {
-            sentCount: { increment: count },
-            updatedAt: new Date(),
-        },
+      where: { queueName },
+      data: {
+        sentCount: { increment: count },
+        updatedAt: new Date(),
+      },
     });
-}
+  }
 
-async incrementQueueFailed(queueName: string, count: number) {
-    this.logger.log(`Incrementing failed count for queue ${queueName} by ${count}`);
+  async incrementQueueFailed(queueName: string, count: number) {
+    this.logger.log(
+      `Incrementing failed count for queue ${queueName} by ${count}`,
+    );
     return this.prismaService.reservationQueue.updateMany({
-        where: { queueName },
-        data: {
-            failedCount: { increment: count },
-            updatedAt: new Date(),
-        },
+      where: { queueName },
+      data: {
+        failedCount: { increment: count },
+        updatedAt: new Date(),
+      },
     });
-}
+  }
 
-async completeQueue(dto: CompleteMailingDto) {
-    this.logger.log(`Completing queue ${dto.queueName} with sent: ${dto.sentCount}, failed: ${dto.failedCount}`);
-    
+  async completeQueue(dto: CompleteMailingDto) {
+    this.logger.log(
+      `Completing queue ${dto.queueName} with sent: ${dto.sentCount}, failed: ${dto.failedCount}`,
+    );
+
     // Найдем reservation queue record для получения reservation ID
     const queueRecord = await this.prismaService.reservationQueue.findFirst({
-        where: { queueName: dto.queueName },
-        include: {
-            mailingReservation: true
-        }
+      where: { queueName: dto.queueName },
+      include: {
+        mailingReservation: true,
+      },
     });
 
     if (!queueRecord) {
-        throw new NotFoundException(`Queue record not found for queue: ${dto.queueName}`);
+      throw new NotFoundException(
+        `Queue record not found for queue: ${dto.queueName}`,
+      );
     }
 
     const reservationId = queueRecord.mailingReservationId;
 
     await this.prismaService.botSeller.update({
-        where: { id: queueRecord.mailingReservation.botSellerId },
-        data: {
-            botLiveAudience: dto.sentCount
-        }
+      where: { id: queueRecord.mailingReservation.botSellerId },
+      data: {
+        botLiveAudience: dto.sentCount,
+      },
     });
 
     // Обновляем viewCount в mailing reservation (это количество успешно отправленных сообщений)
     await this.prismaService.mailingReservation.update({
-        where: { id: reservationId },
-        data: {
-            viewCount: dto.sentCount,
-            isProcessed: true,
-            processedAt: new Date()
-        },
+      where: { id: reservationId },
+      data: {
+        viewCount: dto.sentCount,
+        isProcessed: true,
+        processedAt: new Date(),
+      },
     });
 
     // Обновляем статус и счетчики в queue record
     const updatedQueue = await this.prismaService.reservationQueue.updateMany({
-        where: { queueName: dto.queueName },
-        data: {
-            status: 'COMPLETED',
-            sentCount: dto.sentCount,
-            failedCount: dto.failedCount,
-            updatedAt: new Date(),
-        },
+      where: { queueName: dto.queueName },
+      data: {
+        status: 'COMPLETED',
+        sentCount: dto.sentCount,
+        failedCount: dto.failedCount,
+        updatedAt: new Date(),
+      },
     });
 
-    this.logger.log(`Queue ${dto.queueName} completed successfully. Reservation ${reservationId} marked as processed with ${dto.sentCount} sent messages`);
-    
+    this.logger.log(
+      `Queue ${dto.queueName} completed successfully. Reservation ${reservationId} marked as processed with ${dto.sentCount} sent messages`,
+    );
+
     // Проверяем, можно ли деактивировать рассылку (если все резервации обработаны)
     if (queueRecord.mailingReservation) {
-        await this.checkAndDeactivateMailing(queueRecord.mailingReservation.mailingId);
+      await this.checkAndDeactivateMailing(
+        queueRecord.mailingReservation.mailingId,
+      );
     }
 
     return updatedQueue;
-}
-
+  }
 }

@@ -1,3 +1,4 @@
+import { Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsNotEmpty, IsNumber, IsString, IsOptional, IsBoolean, IsEnum, Matches, ValidateIf } from 'class-validator';
 import { BotCategories } from '@prisma/client';
@@ -35,6 +36,7 @@ export class CreateBotSellerDto {
   @ApiProperty({ description: 'Фиксированная цена', required: true })
   @IsNumber()
   @IsOptional()
+  @Min(0)
   fixedPrice?: number;
 
 

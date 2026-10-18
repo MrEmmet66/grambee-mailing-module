@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -48,6 +49,11 @@ func SendMailingCompletion(backendURL, queueName string, processed, failed int) 
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
+	secret := os.Getenv("SECRET_KEY")
+	if secret == "" {
+		return fmt.Errorf("SECRET_KEY is required for completion callbacks")
+	}
+	req.Header.Set("x-request-secret", secret)
 	req.Header.Set("Content-Type", "application/json")
 
 	logrus.WithFields(logrus.Fields{

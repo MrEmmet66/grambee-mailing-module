@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BalanceService } from './balance.service';
-import { PrismaModule } from 'prisma/prisma.module';
+import { PrismaModule } from '../../../prisma/prisma.module';
 import { ConfigModule } from '@nestjs/config';
 import { HttpModule } from '@nestjs/axios';
 

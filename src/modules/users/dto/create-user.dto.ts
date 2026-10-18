@@ -1,19 +1,27 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, IsOptional } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 
 export class CreateUserDto {
-  @ApiProperty({ description: 'ID пользователя в Telegram' })
-  @IsNotEmpty({ message: 'telegramId is required' })
+  @ApiProperty({ description: 'Verified Telegram ID' })
   @IsString()
+  @Matches(/^[1-9]\d{0,19}$/)
   telegramId: string;
 
-  @ApiProperty({ description: 'Имя пользователя в Telegram', required: false })
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
+  @MaxLength(64)
   username?: string;
 
-  @ApiProperty({ description: 'Пароль пользователя' })
-  @IsNotEmpty({ message: 'password is required' })
+  @ApiProperty({ minLength: 12, maxLength: 128 })
   @IsString()
+  @MinLength(12)
+  @MaxLength(128)
   password: string;
-} 
+}

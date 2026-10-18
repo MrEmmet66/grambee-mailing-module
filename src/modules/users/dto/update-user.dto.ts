@@ -6,4 +6,4 @@ export class UpdateUserDto {
 
   @ApiProperty({ description: 'Имя пользователя в Telegram', required: false })
   username?: string;
-} 
+}

@@ -1,23 +1,26 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ValidationPipe } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder,SwaggerModule } from '@nestjs/swagger';
 import * as nodeCrypto from 'crypto';
+import { AppModule } from './app.module';
+import { protectPrivateUploads } from './config/public-uploads';
 import { HttpExceptionFilter } from './filters/httpException.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  protectPrivateUploads(app);
 
   app.useLogger(['error', 'warn', 'log', 'debug', 'verbose']);
 
   app.useGlobalFilters(new HttpExceptionFilter());
 
+  const origins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: (origin, callback) => {
-    callback(null, true); // разрешает любой origin
-  },
+    origin: origins,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE',
-    preflightContinue: false,
   });
 
   // Add validation pipe
@@ -29,10 +32,8 @@ async function bootstrap() {
       transformOptions: {
         enableImplicitConversion: true,
       },
-    })
+    }),
   );
-
-  
 
   app.setGlobalPrefix('api/v1');
 
@@ -45,7 +46,7 @@ async function bootstrap() {
     .build();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, document);
-  
+
   await app.listen(process.env.PORT ?? 3000);
 }
 

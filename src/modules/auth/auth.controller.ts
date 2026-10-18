@@ -1,28 +1,31 @@
-import { Controller, Post, Body, Get, UseGuards, Param, Logger, Delete } from '@nestjs/common';
+import { Body, Controller, Post, UseGuards } from '@nestjs/common';
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
-import { RegisterDto } from './dto/register.dto';
-import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { CurrentUser } from './decorators/current-user.decorator';
-import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam } from '@nestjs/swagger';
+import { Public, TokenResponse } from './decorators/auth-policy.decorator';
+import { LoginDto, RefreshTokenDto } from './dto/login.dto';
 
 @ApiTags('Authentication')
+@UseGuards(ThrottlerGuard)
 @Controller('auth')
 export class AuthController {
-  private readonly logger = new Logger(AuthController.name);
-
   constructor(private readonly authService: AuthService) {}
 
+  @Public()
+  @TokenResponse()
   @Post('login')
   @ApiOperation({ summary: 'Login by telegramId and password' })
-  async login(@Body() body: { telegramId: string; password: string }) {
-    const tokens = await this.authService.login(body.telegramId, body.password);
-    return tokens;
+  login(@Body() body: LoginDto) {
+    return this.authService.login(body.telegramId, body.password);
   }
 
+  @Public()
+  @TokenResponse()
   @Post('refresh')
-  @ApiOperation({ summary: 'Refresh access token by refresh token' })
-  async refresh(@Body() body: { userId: number; refreshToken: string }) {
-    const tokens = await this.authService.refreshToken(body.userId, body.refreshToken);
-    return tokens;
+  @ApiOperation({
+    summary: 'Rotate refresh token; userId is the internal account ID',
+  })
+  refresh(@Body() body: RefreshTokenDto) {
+    return this.authService.refreshToken(body.userId, body.refreshToken);
   }
 }

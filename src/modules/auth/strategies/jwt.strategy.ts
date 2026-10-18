@@ -3,30 +3,35 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthRepository } from '../repositories/auth.repository';
+import { TokenPayload } from '../auth.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
-    private readonly configService: ConfigService,
+    config: ConfigService,
     private readonly authRepository: AuthRepository,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get<string>('JWT_SECRET') || 'super-secret',
+      secretOrKey: config.getOrThrow<string>('JWT_SECRET'),
+      algorithms: ['HS256'],
     });
   }
-
-  async validate(payload: any) {
-    const user = await this.authRepository.findByTelegramId(payload.telegramId);
-
-    if (!user) {
+  async validate(payload: TokenPayload) {
+    if (
+      payload.type !== 'access' ||
+      !Number.isSafeInteger(payload.sub) ||
+      payload.sub < 1 ||
+      !payload.jti
+    ) {
       throw new UnauthorizedException();
     }
-
+    const user = await this.authRepository.findById(payload.sub);
+    if (!user) throw new UnauthorizedException();
     return {
       id: user.id,
-      telegramId: user.telegramId.toString(),
+      telegramId: user.telegramId,
       username: user.username,
     };
   }

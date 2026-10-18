@@ -1,7 +1,7 @@
 {
   "name": "bee-app-mailing-backend",
   "version": "0.0.1",
-  "description": "",
+  "description": "NestJS API and Go workers for an advertising mailing marketplace",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
@@ -10,7 +10,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "node dist/src/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -20,11 +20,13 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node prisma/seed.ts",
-    "db:push": "prisma db push"
+    "db:push": "prisma db push",
+    "security:migrate-credentials": "ts-node scripts/migrate-legacy-credentials.ts",
+    "lint:check": "eslint \"{src,apps,libs,test}/**/*.ts\"",
+    "lint:security": "eslint src/modules/auth src/modules/users src/config scripts"
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.0",
-    "@nestjs/bull": "^11.0.2",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
@@ -33,20 +35,18 @@
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/schedule": "^6.0.0",
     "@nestjs/serve-static": "^5.0.3",
-    "@nestjs/swagger": "7.3.0",
+    "@nestjs/swagger": "^11.4.7",
+    "@nestjs/throttler": "^6.7.1",
     "@prisma/client": "^6.6.0",
     "axios": "^1.9.0",
-    "bull": "^4.16.5",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
-    "form-data": "^4.0.2",
-    "install": "^0.13.0",
     "nestjs-telegraf": "^2.9.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "prisma": "^6.6.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "swagger-ui-express": "5.0.0",
     "telegraf": "^4.16.3"
   },
   "devDependencies": {
@@ -61,6 +61,7 @@
     "@types/jest": "^29.5.14",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.10.7",
+    "@types/passport-jwt": "^4.0.1",
     "@types/supertest": "^6.0.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
@@ -68,7 +69,6 @@
     "globals": "^16.0.0",
     "jest": "^29.7.0",
     "prettier": "^3.4.2",
-    "prisma": "^6.6.0",
     "source-map-support": "^0.5.21",
     "supertest": "^7.0.0",
     "ts-jest": "^29.2.5",
@@ -98,5 +98,8 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "engines": {
+    "node": ">=22.13"
   }
 }

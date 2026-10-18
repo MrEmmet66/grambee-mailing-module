@@ -4,7 +4,7 @@ https://docs.nestjs.com/providers#services
 
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { PrismaService } from 'prisma/prisma.service';
+import { PrismaService } from '../../../../prisma/prisma.service';
 
 @Injectable()
 export class MailingCheckoutService {
@@ -42,16 +42,11 @@ export class MailingCheckoutService {
             throw new Error(`Mailing target bot not found`);
         }
 
-        const serviceDefaultSubscriberPrice = this.configService.get<number>('SERVICE_DEFAULT_SUBSCRIBER_PRICE', 0.0005);
-        const serviceChannelDefaultSubscriberPrice = this.configService.get<number>('SERVICE_CHANNEL_DEFAULT_SUBSCRIBER_PRICE', 0.0002);
-        let amountToPay = 0;
-        let amountToRelease = 0;
-        if(mailingTargetBot?.paymentType === 'fixed') {
-            
-
-        }
-
-
-        return reservation;
+        // Метод нигде не вызывается: расчёт списания/возврата для канала не
+        // реализован, а ветка ниже раньше молча ничего не делала и возвращала
+        // необработанную резервацию. Явная ошибка честнее тихого no-op.
+        throw new Error(
+          `checkoutChannelMailing is not implemented (reservation ${mailingReservationId}, paymentType ${mailingTargetBot.paymentType}, views ${views})`,
+        );
     }
 }

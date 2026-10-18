@@ -1,36 +1,49 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Param,
+  ParseIntPipe,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { UsersService } from './users.service';
-import { CreateUserDto, UpdateUserDto } from './dto';
-import { ApiTags, ApiOperation, ApiParam, ApiBody, ApiResponse } from '@nestjs/swagger';
+import { CreateUserDto } from './dto';
+import {
+  ServiceOnly,
+  TokenResponse,
+} from '../auth/decorators/auth-policy.decorator';
+import { Owns } from '../auth/guards/resource-owner.guard';
 
 @ApiTags('Users')
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
+  // A trusted gateway must verify Telegram ownership before provisioning an account.
+  @UseGuards(ThrottlerGuard)
+  @ServiceOnly()
+  @TokenResponse()
   @Post()
-  @ApiOperation({ summary: 'Создание нового пользователя' })
-  @ApiBody({ type: CreateUserDto })
-  @ApiResponse({ status: 201, description: 'Пользователь успешно создан' })
-  create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+  @ApiOperation({
+    summary:
+      'Provision a verified Telegram user (service credentials required)',
+  })
+  create(@Body() dto: CreateUserDto) {
+    return this.usersService.create(dto);
   }
 
-
+  @Owns('user', 'id')
   @Get(':id')
-  @ApiOperation({ summary: 'Получение пользователя по ID' })
-  @ApiParam({ name: 'id', description: 'ID пользователя' })
-  @ApiResponse({ status: 200, description: 'Данные о пользователе' })
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(+id);
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.usersService.findOne(id);
   }
 
+  @Owns('telegramUser', 'telegramId')
   @Get('telegram/:telegramId')
-  @ApiOperation({ summary: 'Получение пользователя по Telegram ID' })
-  @ApiParam({ name: 'telegramId', description: 'Telegram ID пользователя' })
-  @ApiResponse({ status: 200, description: 'Данные о пользователе' })
   findByTelegramId(@Param('telegramId') telegramId: string) {
     return this.usersService.findByTelegramId(telegramId);
   }
-
-} 
+}

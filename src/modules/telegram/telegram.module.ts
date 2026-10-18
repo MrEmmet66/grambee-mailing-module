@@ -1,3 +1,5 @@
+import { ApplicationHandlersService } from './application-handlers.service';
+import { ApplicationSendersService } from './applications-sender.service';
 import { Module, forwardRef, OnModuleInit } from '@nestjs/common';
 import { TelegramService } from './telegram.service';
 import { TelegramController } from './telegram.controller';
@@ -12,7 +14,7 @@ import { MailingModule } from '../mailing/mailing.module';
 import { ApplicationsService } from './applications.service';
 import { MailingPaymentService } from '../mailing/services/payment.service';
 import { StatsService } from '../mailing/stats/stats.service';
-import { PrismaModule } from 'prisma/prisma.module';
+import { PrismaModule } from '../../../prisma/prisma.module';
 
 @Module({
   imports: [
@@ -26,32 +28,42 @@ import { PrismaModule } from 'prisma/prisma.module';
       useFactory: (configService: ConfigService) => {
         const token = configService.get<string>('BOT_TOKEN');
         if (!token) {
-          throw new Error('TELEGRAM_BOT_TOKEN is not defined in environment variables');
+          throw new Error(
+            'TELEGRAM_BOT_TOKEN is not defined in environment variables',
+          );
         }
         return { token };
       },
       inject: [ConfigService],
-    })
+    }),
   ],
   controllers: [TelegramController],
-  providers: [TelegramService, ApplicationsService, StatsService],
-  exports: [TelegramService, ApplicationsService],
+  providers: [
+    TelegramService,
+    ApplicationsService,
+    StatsService,
+    ApplicationHandlersService,
+    ApplicationSendersService,
+  ],
+  exports: [TelegramService, ApplicationsService, ApplicationSendersService],
 })
 export class TelegramModule implements OnModuleInit {
   constructor(
     private moduleRef: ModuleRef,
-    private telegramService: ApplicationsService
+    private telegramService: ApplicationsService,
   ) {}
 
   async onModuleInit() {
     // Настраиваем обработчики колбэков
     await this.telegramService.setupCallbackHandlers();
     console.log('Telegram callbacks initialized');
-    
+
     // Wait for next tick to ensure all providers are resolved
     setTimeout(() => {
       try {
-        const botSellersService = this.moduleRef.get(BotSellersService, { strict: false });
+        const botSellersService = this.moduleRef.get(BotSellersService, {
+          strict: false,
+        });
         if (botSellersService) {
           this.telegramService.setBotSellersService(botSellersService);
 

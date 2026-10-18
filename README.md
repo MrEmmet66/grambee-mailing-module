@@ -14,12 +14,6 @@
   <img alt="Redis" src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white">
 </p>
 
-<!--
-  DEMO
-  If the project is deployed, put a short demo link or a Loom/YouTube walkthrough here, e.g.
-  Demo: https://demo.example.com  (read-only account: demo / demo)
--->
-
 ## Overview
 
 The platform connects two sides of an advertising market:
@@ -33,21 +27,28 @@ the money side consistent: reservations, holds, commissions, balances and referr
 
 ## Stack
 
-| Layer | Technology |
-| --- | --- |
-| API | NestJS 11, TypeScript, class-validator, Passport + JWT |
-| Data | PostgreSQL, Prisma ORM |
-| Queues / cache | Redis, Bull (Node), asynq (Go) |
-| Delivery worker | Go 1.21, Gin, asynq, logrus |
-| Userbot service | Python 3.11, FastAPI, Telethon |
-| Docs | Swagger (OpenAPI) |
-| Infra | Docker, Docker Compose |
+| Layer           | Technology                                             |
+| --------------- | ------------------------------------------------------ |
+| API             | NestJS 11, TypeScript, class-validator, Passport + JWT |
+| Data            | PostgreSQL, Prisma ORM                                 |
+| Queues / cache  | Redis, asynq (Go)                                      |
+| Delivery worker | Go 1.21, Gin, asynq, logrus                            |
+| Userbot service | Python 3.11, FastAPI, Telethon                         |
+| Docs            | Swagger (OpenAPI)                                      |
+| Infra           | Docker, Docker Compose                                 |
 
 ## Architecture
 
-<img src="docs/images/architecture.png" alt="Architecture" width="100%">
-
-<!-- capture: a diagram of the 4 services and how they talk. boxes: Web client -> api (NestJS) -> postgres / redis; api -> go-mailing-worker (REST) -> redis (asynq) -> Telegram Bot API; api -> telethon-api -> Telegram userbot. Draw in draw.io or excalidraw and export PNG. -->
+```mermaid
+flowchart LR
+  Client[Web client] --> API[NestJS API]
+  API --> DB[(PostgreSQL)]
+  API --> Worker[Go delivery worker]
+  Worker --> Redis[(Redis / asynq)]
+  Worker --> Telegram[Telegram]
+  API --> Userbot[Telethon service]
+  Userbot --> Telegram
+```
 
 The system is split into three services behind a single HTTP API:
 
@@ -80,24 +81,24 @@ The worker is a separate service because sending is long-running and rate-limite
 
 The API is documented with Swagger and served at `/api/docs`. Modules:
 
-| Module | Responsibility |
-| --- | --- |
-| `auth` | Registration, login, JWT access and refresh tokens |
-| `users` | User accounts |
-| `bot_sellers` | Audience registration (bots and channels), statistics, moderation |
-| `mailing` | Mailing creation, reservations, scheduling, processing, payment |
-| `mailing/stats` | Per-mailing and per-audience statistics |
-| `balance` | Balance and transactions |
-| `commissions` | Commission calculation and payouts |
-| `telegram` | Bot integration, notifications, application handling |
-| `notifications` | In-app notifications |
+| Module          | Responsibility                                                    |
+| --------------- | ----------------------------------------------------------------- |
+| `auth`          | Registration, login, JWT access and refresh tokens                |
+| `users`         | User accounts                                                     |
+| `bot_sellers`   | Audience registration (bots and channels), statistics, moderation |
+| `mailing`       | Mailing creation, reservations, scheduling, processing, payment   |
+| `mailing/stats` | Per-mailing and per-audience statistics                           |
+| `balance`       | Balance and transactions                                          |
+| `commissions`   | Commission calculation and payouts                                |
+| `telegram`      | Bot integration, notifications, application handling              |
+| `notifications` | In-app notifications                                              |
 
 ## Getting started
 
 ### With Docker Compose
 
 ```bash
-cp .env.example .env      # fill in your own values
+cp .env.example .env      # set TWO different random secrets, at least 32 characters each
 docker compose up --build
 ```
 
@@ -111,6 +112,8 @@ npx prisma migrate dev
 npm run start:dev
 ```
 
+Use Node 22.13 or later. Startup rejects missing, weak or identical authentication secrets.
+
 ### Environment
 
 All configuration lives in `.env` (see `.env.example` for the full list). The important groups are the database URL, Telegram bot tokens, userbot `api_id`/`api_hash`, JWT secrets, Redis connection and commission settings.
@@ -118,19 +121,19 @@ All configuration lives in `.env` (see `.env.example` for the full list). The im
 ## Tests
 
 ```bash
-npm test                                  # NestJS: telegram targets, commissions, balance
+npm test -- --runInBand                    # API and security regression tests
 cd go-mailing-worker && go test ./...     # Go: rate limiters and worker handlers
 ```
 
-## Screenshots
+## Security
 
-<img src="docs/images/swagger.png" alt="Swagger UI" width="100%">
+JWT protection is enabled by default. Login, refresh and health checks are public; provisioning, moderation and worker callbacks require service credentials in `x-request-secret`. Protected operations enforce resource ownership. Never send the service key to the browser.
 
-<!-- capture: open http://localhost:4000/api/docs, expand a couple of endpoints (mailings, bot-sellers), screenshot the request/response panel. -->
+Passwords use salted scrypt. Refresh tokens are hashed in storage, have a distinct purpose and rotate atomically. User fields are explicitly selected; private credentials and audience data are removed from HTTP responses. Login attempts are rate limited.
 
-<img src="docs/images/worker-dashboard.png" alt="Worker queue dashboard" width="100%">
+For an existing database, stop the API and run `npm run security:migrate-credentials` before deployment. See [the security review](docs/security-review.md) for rollout steps, test boundaries and remaining payment risks.
 
-<!-- capture: the asynqmon dashboard showing active/completed queues and job throughput. -->
+Compose publishes the API on localhost port 4000. Worker and userbot APIs remain inside the container network; database/admin ports bind to localhost. Use an authenticated reverse proxy for external access.
 
 ## Repository layout
 

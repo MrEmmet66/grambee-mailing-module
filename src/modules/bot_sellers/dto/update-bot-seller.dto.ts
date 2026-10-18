@@ -1,3 +1,4 @@
+import { Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional, IsString, IsNumber, IsBoolean, IsEnum, IsDate, Matches } from 'class-validator';
 
@@ -14,6 +15,7 @@ export class UpdateBotSellerDto {
   @ApiProperty({ description: 'Фиксированная цена', required: false })
   @IsNumber()
   @IsOptional()
+  @Min(0)
   fixedPrice?: number;
 
   @ApiProperty({ description: 'Ссылка на бота', required: false })

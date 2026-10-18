@@ -1,3 +1,5 @@
+import { MEDIA_UPLOAD_OPTIONS } from './media-upload.options';
+import { AudienceFilesController } from './audience-files.controller';
 /*
 https://docs.nestjs.com/modules
 */
@@ -9,7 +11,7 @@ import { MailingScheduleService } from './mailingSchedue.service';
 import { MulterModule } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { extname } from 'path';
-import { PrismaModule } from 'prisma/prisma.module';
+import { PrismaModule } from '../../../prisma/prisma.module';
 import { TelegramModule } from '../telegram/telegram.module';
 import { HttpModule } from '@nestjs/axios';
 import { ConfigModule } from '@nestjs/config';
@@ -22,25 +24,34 @@ import { ProcessorController } from './processor.controller';
 import { MailingCheckoutService } from './services/mailingcheckout.service';
 
 @Module({
-    imports: [
-        forwardRef(() => TelegramModule),
-        BalanceModule,
-        ConfigModule,
-        HttpModule,
-        PrismaModule,
-        MulterModule.register({
-            storage: diskStorage({
-                destination: './uploads',
-                filename: (req, file, cb) => {
-                    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-                    const ext = extname(file.originalname);
-                    cb(null, `${file.fieldname}-${uniqueSuffix}${ext}`);
-                },
-            }),
-        }),
-    ],
-    controllers: [MailingController, ProcessorController],
-    providers: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService, ProcessorService, MailingCheckoutService],
-    exports: [MailingService, MailingScheduleService, MailingPaymentService, ReservationService, ProcessorService, MailingCheckoutService],
+  imports: [
+    forwardRef(() => TelegramModule),
+    BalanceModule,
+    ConfigModule,
+    HttpModule,
+    PrismaModule,
+    MulterModule.register(MEDIA_UPLOAD_OPTIONS),
+  ],
+  controllers: [
+    MailingController,
+    ProcessorController,
+    AudienceFilesController,
+  ],
+  providers: [
+    MailingService,
+    MailingScheduleService,
+    MailingPaymentService,
+    ReservationService,
+    ProcessorService,
+    MailingCheckoutService,
+  ],
+  exports: [
+    MailingService,
+    MailingScheduleService,
+    MailingPaymentService,
+    ReservationService,
+    ProcessorService,
+    MailingCheckoutService,
+  ],
 })
 export class MailingModule {}
